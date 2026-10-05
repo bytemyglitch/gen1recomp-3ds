@@ -173,7 +173,26 @@ function Mock.newFilesystem(sourceDir, saveRoot)
   end
   Mock.resolvePath = resolve
 
+  -- LÖVE Potion's translatePath (include/utilities/functions.hpp): on 3DS a
+  -- .png/.jpg/.jpeg path is opened as .t3x and .ttf/.otf as .bcfnt.  Stock
+  -- 3.0.2 always swaps; the patched build only swaps when the file asked for
+  -- is missing.
+  local function translate(rel)
+    rel = tostring(rel)
+    if not Mock.stockPaths and resolve(rel) then return rel end
+    local lower = rel:lower()
+    for _, ext in ipairs({ ".png", ".jpg", ".jpeg" }) do
+      if lower:sub(-#ext) == ext then return rel:sub(1, -#ext - 1) .. ".t3x" end
+    end
+    for _, ext in ipairs({ ".ttf", ".otf" }) do
+      if lower:sub(-#ext) == ext then return rel:sub(1, -#ext - 1) .. ".bcfnt" end
+    end
+    return rel
+  end
+  Mock.translate = translate
+
   local function readAll(rel)
+    rel = translate(rel)
     local path = resolve(rel)
     if not path or isDir(path) then return nil, "Could not open file " .. tostring(rel) end
     local f = io.open(path, "rb")
@@ -209,7 +228,7 @@ function Mock.newFilesystem(sourceDir, saveRoot)
     return nil
   end
   function impl.getInfo(rel, filterOrTable, maybeTable)
-    local path = resolve(rel)
+    local path = resolve(translate(rel))
     if not path then return nil end
     local info = (type(filterOrTable) == "table" and filterOrTable)
       or (type(maybeTable) == "table" and maybeTable) or {}
@@ -657,10 +676,20 @@ function Mock.install(opts)
     getCanvas = function() return gstate.canvas end,
     setFont = function(f) gstate.font = f end,
     getFont = function() return gstate.font end,
+    -- The 3DS rasterizer only reads CFNT (.bcfnt) and does not check: any
+    -- other bytes are parsed as CFNT and crash the console.
     newFont = function(a, b)
-      if type(a) == "number" then return newFont(a) end
+      if a == nil or type(a) == "number" then return newFont(a or 12) end
+      local bytes, name
       if type(a) == "string" then
-        if not Mock.resolvePath(a) then error("Could not open file " .. a .. ". Does not exist.", 2) end
+        bytes = Mock.readFile(a)
+        if not bytes then error("Could not open file " .. Mock.translate(a) .. ". Does not exist.", 2) end
+        name = a
+      elseif type(a) == "table" and a.getString then
+        bytes, name = a:getString(), "<data>"
+      end
+      if bytes and bytes:sub(1, 4) ~= "CFNT" then
+        error("CONSOLE CRASH: non-CFNT font data (" .. tostring(name) .. ") passed to the 3DS font rasterizer", 2)
       end
       return newFont(type(b) == "number" and b or 12)
     end,

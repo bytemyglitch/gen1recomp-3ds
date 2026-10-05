@@ -11,7 +11,10 @@ local gameDir = assert(arg[1], "game dir")
 local saveRoot = assert(arg[2], "save root")
 local frames = tonumber(arg[3]) or 600
 local unpatched = false
-for i = 4, #arg do if arg[i] == "--unpatched" then unpatched = true end end
+for i = 4, #arg do
+  if arg[i] == "--unpatched" then unpatched = true end
+  if arg[i] == "--stock-paths" then Mock.stockPaths = true end
+end
 
 os.execute("mkdir -p '" .. saveRoot .. "'")
 Mock.install({ source = gameDir, saveRoot = saveRoot, unpatchedPotion = unpatched })
@@ -178,6 +181,12 @@ local okC, errC = xpcall(function()
   local env = { x = 41 }
   local fn = load("return x + 1", "=probe", "t", env)
   check("load(string, name, mode, env) works on Lua 5.1", fn and fn() == 42)
+  local okTtf = pcall(love.graphics.newFont,
+    love.filesystem.newFileData("\0\1\0\0 not a cfnt", "UiSymbols.ttf"), 14)
+  local okPath = pcall(love.graphics.newFont, "assets/fonts/plainpixel/PlainPixel-Regular.ttf", 14)
+  check("TrueType fonts fall back to the system font (no CFNT crash)", okTtf and okPath)
+  local okPng = pcall(love.graphics.newImage, "assets/logo/logo.png")
+  check("PNG paths load as PNG, not rewritten to .t3x", okPng)
   check("text escapes decode the same as LuaJIT",
     ("POK\195\169"):byte(4) == 0xC3 and ("\195\151"):byte(2) == 0x97)
 end, traceback)

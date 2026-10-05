@@ -58,6 +58,9 @@ LÖVE Potion (`lovepotion-3ds.patch`):
   PNG as well, which the game's art and its import cache need.
 - Static sound effects freed their shared sample memory twice when collected.
 - `Source:setVolume` was lost whenever a source started playing.
+- On 3DS every `.png`/`.jpg` path was silently opened as `.t3x` (and `.ttf`
+  as `.bcfnt`), so no PNG could ever load. It now falls back to the converted
+  file only when the file asked for is missing.
 
 Gen1Recomp:
 
@@ -65,6 +68,8 @@ Gen1Recomp:
   calls LÖVE Potion lacks (shaders, mouse, keyboard polling, window queries
   and a few others). It also adds a Lua 5.2-style `load`, which LuaJIT has
   and LÖVE Potion's Lua 5.1 lacks. On every other platform it does nothing.
+- TrueType fonts can't be used on 3DS: its rasterizer reads only `.bcfnt`
+  and crashes on anything else. The launcher's TTF faces use the system font.
 - `main.lua` draws the game to the top screen only and drops bottom-screen
   touches. `conf.lua` sets up the 400×240 window.
 - `Platform` and `Performance` recognize the 3DS. ROM import uses the

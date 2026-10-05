@@ -123,6 +123,39 @@ local function installGraphics()
     }
   end)
 
+  -- Fonts: the 3DS rasterizer reads only the console's CFNT/.bcfnt format,
+  -- with no format check -- TrueType bytes handed to it are parsed as CFNT
+  -- and crash the console outright (no Lua error to catch).  The launcher
+  -- loads .ttf faces and UiFont builds a TrueType symbol font in memory, so
+  -- anything that is not a .bcfnt becomes the system font at the same size.
+  if g.newFont and not Compat3DS._newFontWrapped then
+    Compat3DS._newFontWrapped = true
+    local realNewFont = g.newFont
+    local function isCfnt(source)
+      if type(source) == "string" then
+        if source:match("%.bcfnt$") then return true end
+        local converted = source:gsub("%.[OoTt][Tt][Ff]$", ".bcfnt")
+        return converted ~= source and love.filesystem.getInfo(converted) ~= nil
+      end
+      if type(source) == "userdata" or type(source) == "table" then
+        if source.typeOf and source:typeOf("Rasterizer") then return true end
+        if source.getString then
+          local ok, head = pcall(function() return source:getString():sub(1, 4) end)
+          return ok and head == "CFNT"
+        end
+      end
+      return false
+    end
+    g.newFont = function(source, size, ...)
+      if source == nil or type(source) == "number" then
+        return realNewFont(source, size, ...)
+      end
+      if isCfnt(source) then return realNewFont(source, size, ...) end
+      return realNewFont(type(size) == "number" and size or 12)
+    end
+    Compat3DS.stubbed[#Compat3DS.stubbed + 1] = "graphics.newFont (TrueType -> system font)"
+  end
+
   -- One picture on the top screen; stereoscopic 3D would draw everything
   -- twice for an image that has no depth.
   if g.set3D then pcall(g.set3D, false) end

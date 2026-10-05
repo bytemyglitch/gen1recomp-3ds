@@ -1,4 +1,4 @@
-From f781d8c99513b200f810f4cef92f9c12d238b9f6 Mon Sep 17 00:00:00 2001
+From dfb76484ea518e83c76f23bf60e64bfddab408e9 Mon Sep 17 00:00:00 2001
 From: Aaron Morgan <morganaaron.mail@icloud.com>
 Date: Mon, 5 Oct 2026 15:55:33 -0500
 Subject: [PATCH] 3DS: implement queueable sources, decode PNG, fix static
@@ -19,7 +19,8 @@ Claude-Session: https://claude.ai/code/session_01YUDdWjWFXzUKoBPqr1pYpC
  .../ctr/source/modules/imagemodule_ext.cpp    |   2 +
  platform/ctr/source/objects/source_ext.cpp    | 177 ++++++++++++++++--
  source/modules/audio/wrap_audio.cpp           |  29 ++-
- 5 files changed, 210 insertions(+), 18 deletions(-)
+ source/modules/filesystem/wrap_filesystem.cpp |  10 +-
+ 6 files changed, 217 insertions(+), 21 deletions(-)
 
 diff --git a/include/objects/imagedata/imagedata.tcc b/include/objects/imagedata/imagedata.tcc
 index dce31cf..2cfa70f 100644
@@ -393,6 +394,34 @@ index ec83e74..0afe941 100644
      { "play",                 Wrap_Audio::Play                 },
      { "pause",                Wrap_Audio::Pause                },
      { "stop",                 Wrap_Audio::Stop                 },
+diff --git a/source/modules/filesystem/wrap_filesystem.cpp b/source/modules/filesystem/wrap_filesystem.cpp
+index 9c9efec..6691302 100644
+--- a/source/modules/filesystem/wrap_filesystem.cpp
++++ b/source/modules/filesystem/wrap_filesystem.cpp
+@@ -374,7 +374,8 @@ int Wrap_Filesystem::GetInfo(lua_State* L)
+     }
+ 
+     std::filesystem::path path = filepath;
+-    translatePath(path);
++    if (!instance()->Exists(filepath))
++        translatePath(path);
+ 
+     if (instance()->GetInfo(path.c_str(), info))
+     {
+@@ -665,8 +666,11 @@ File* Wrap_Filesystem::GetFile(lua_State* L, int index)
+ 
+     if (lua_isstring(L, index))
+     {
+-        std::filesystem::path filename = luaL_checkstring(L, index);
+-        translatePath(filename);
++        const char* requested             = luaL_checkstring(L, index);
++        std::filesystem::path filename = requested;
++        /* only fall back to the converted .t3x/.bcfnt when the file asked for is absent */
++        if (!instance()->Exists(requested))
++            translatePath(filename);
+ 
+         file = instance()->OpenFile(filename.c_str(), File::MODE_CLOSED);
+     }
 -- 
 2.43.0
 
