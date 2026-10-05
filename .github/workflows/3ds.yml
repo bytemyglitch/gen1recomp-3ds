@@ -1,0 +1,47 @@
+name: Nintendo 3DS
+
+# Builds dist/3ds/gen1recomp.3dsx: LÖVE Potion (pinned, with
+# ports/3ds/lovepotion-3ds.patch) built in devkitPro's devkitARM container,
+# with the game fused onto it.  Download it from the run's artifacts.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [3ds-port]
+    paths:
+      - "ports/3ds/**"
+      - "src/**"
+      - "main.lua"
+      - "conf.lua"
+      - ".github/workflows/3ds.yml"
+
+jobs:
+  harness:
+    name: Boot on the LÖVE Potion API mock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the 3DS boot harness
+        run: ports/3ds/harness/run.sh 600
+
+  build:
+    name: Build gen1recomp.3dsx
+    needs: harness
+    runs-on: ubuntu-latest
+    container:
+      image: docker://devkitpro/devkitarm
+      options: --cpus 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools for packing
+        run: apt-get update -qq && apt-get install -y -qq zip unzip git
+      - name: Build patched LÖVE Potion and fuse the game
+        run: |
+          git config --global --add safe.directory '*'
+          ports/3ds/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gen1recomp-3ds
+          path: |
+            dist/3ds/gen1recomp.3dsx
+            dist/3ds/lovepotion-patched.3dsx

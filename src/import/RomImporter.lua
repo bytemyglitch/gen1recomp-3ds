@@ -1525,7 +1525,10 @@ function RomImporter.new(onComplete, opts)
   -- NX uses a separate save-directory inbox (isNX / romImportMode) and must
   -- never set android or take the mobile delete-after-import path.
   local mobileOS = love.system.getOS()
-  local isNX = Platform.isNX()
+  -- The 3DS rides the NX flows too: no file picker, no touch-first UI, so
+  -- ROMs, saves and mods go into the imports/ inbox in the save directory
+  -- and the gamepad cursor drives the launcher.
+  local isNX = Platform.isNX() or Platform.is3DS()
   local romImportMode = Platform.romImportMode()
   local mobileFileBridge = mobileOS == "Android" or mobileOS == "iOS"
   local android = mobileFileBridge

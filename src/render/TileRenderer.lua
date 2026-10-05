@@ -589,7 +589,12 @@ local function bakeBorderFill(self, block)
   end
   love.graphics.setCanvas()
   love.graphics.pop()
-  local img = love.graphics.newImage(canvas:newImageData())
+  -- Read back into a plain Image where the host can (desktop/mobile); the
+  -- 3DS build cannot read a canvas back, so the canvas itself is the fill.
+  local img = canvas
+  if canvas.newImageData then
+    img = love.graphics.newImage(canvas:newImageData())
+  end
   img:setWrap("repeat", "repeat")
   img:setFilter("nearest", "nearest")
   self.borderFill = img

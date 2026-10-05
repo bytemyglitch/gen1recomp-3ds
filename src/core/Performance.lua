@@ -97,7 +97,14 @@ end
 -- multi-core desktop -- the common case, and every existing install whose
 -- options.lua predates this option -- resolves to HIGH and behaves exactly
 -- as before.
+local function is3DS()
+  return love ~= nil and love._console == "3DS"
+end
+
 function Performance.detect()
+  -- Nintendo 3DS: plain Lua 5.1 at 804 MHz, no shaders.  LOW is the only
+  -- tier whose caps it can honour (no tilt, no SHADER FX, 22 kHz audio).
+  if is3DS() then return "low" end
   local os = loveOS()
   local arch = cpuArch()
   local isArm = arch == "arm" or arch == "arm64"
@@ -125,6 +132,9 @@ end
 -- Fold a stored option value to a concrete tier, resolving "auto" (and any
 -- hand-edited garbage) through detect().
 function Performance.resolve(value)
+  -- A HIGH or BALANCED left in an options.lua copied from a PC would turn on
+  -- effects the 3DS cannot draw; the tier is not a choice there.
+  if is3DS() then return "low" end
   if value == "high" or value == "balanced" or value == "low" then
     return value
   end

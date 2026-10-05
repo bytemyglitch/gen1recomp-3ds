@@ -1,4 +1,11 @@
 function love.conf(t)
+  -- Nintendo 3DS (LÖVE Potion): fill in the filesystem calls below before
+  -- anything uses them.  A no-op everywhere else.
+  local n3ds = love._console == "3DS"
+  if n3ds then
+    require("src.core.Compat3DS").installConf()
+  end
+
   -- PhysFS ignores symlinks unless told otherwise, so a mod dev-linked into
   -- mods/ (ln -s, matching the mklink /J workflow on Windows) is invisible
   -- to love.filesystem.getDirectoryItems without this.
@@ -81,7 +88,20 @@ function love.conf(t)
   local osName = love._os
   local mobile = osName == "Android" or osName == "iOS"
   local nx = osName == "NX"
-  if nx then
+  if n3ds then
+    -- Nintendo 3DS: the game draws 160x144 at 1x on the 400x240 top screen
+    -- (see main.lua's love.run and src/core/Compat3DS.lua).  The window size
+    -- is fixed by the hardware; these only keep the desktop-oriented code
+    -- that reads t.window from assuming a resizable 1024x768 window.
+    t.window.width = 400
+    t.window.height = 240
+    t.window.fullscreen = false
+    t.window.resizable = false
+    t.window.highdpi = false
+    t.modules.mouse = false
+    t.modules.video = false
+    t.accelerometerjoystick = false
+  elseif nx then
     -- Switch (love-nx): hint handheld 720p. SDL auto-switches portable↔dock
     -- (720p↔1080p) only when the window is resizable and not exclusive
     -- fullscreen; NxDisplay.sync also applies the size on boot and dock change.

@@ -73,6 +73,30 @@ function Icons.has(name)
   return name == "triangle-alert" or cells[name] ~= nil
 end
 
+-- The atlases are one 96px row each, 1728 and 3168 pixels wide.  The 3DS
+-- GPU cannot hold a texture wider than 1024, so there they are cut into
+-- pages of PAGE_CELLS icons (960px) and each icon remembers its page.
+local PAGE_CELLS = 10
+
+local function loadPaged(g, atlas)
+  local source = love.image.newImageData(atlas.path)
+  atlas.pages, atlas.quads = {}, {}
+  local count = #atlas.names
+  for first = 1, count, PAGE_CELLS do
+    local cellsHere = math.min(PAGE_CELLS, count - first + 1)
+    local page = love.image.newImageData(cellsHere * 96, 96)
+    page:paste(source, 0, 0, (first - 1) * 96, 0, cellsHere * 96, 96)
+    local image = g.newImage(page)
+    if image.setFilter then image:setFilter("linear", "linear") end
+    for k = 0, cellsHere - 1 do
+      local id = atlas.names[first + k]
+      atlas.pages[id] = image
+      atlas.quads[id] = g.newQuad(k * 96, 0, 96, 96, cellsHere * 96, 96)
+    end
+  end
+  atlas.image = atlas.pages[atlas.names[1]]
+end
+
 function Icons.draw(name, x, y, size, color, alpha)
   local g = love and love.graphics
   if g and name == "triangle-alert" then
@@ -95,13 +119,17 @@ function Icons.draw(name, x, y, size, color, alpha)
   end
   local atlas = cell.atlas
   if not atlas.image then
-    atlas.image = g.newImage(atlas.path)
-    if atlas.image.setFilter then
-      atlas.image:setFilter("linear", "linear")
-    end
-    atlas.quads = {}
-    for i, id in ipairs(atlas.names) do
-      atlas.quads[id] = g.newQuad((i - 1) * 96, 0, 96, 96, #atlas.names * 96, 96)
+    if love._console == "3DS" then
+      loadPaged(g, atlas)
+    else
+      atlas.image = g.newImage(atlas.path)
+      if atlas.image.setFilter then
+        atlas.image:setFilter("linear", "linear")
+      end
+      atlas.quads = {}
+      for i, id in ipairs(atlas.names) do
+        atlas.quads[id] = g.newQuad((i - 1) * 96, 0, 96, 96, #atlas.names * 96, 96)
+      end
     end
   end
   local quad = atlas.quads[name]
@@ -109,7 +137,7 @@ function Icons.draw(name, x, y, size, color, alpha)
     return
   end
   g.setColor(color[1] / 255, color[2] / 255, color[3] / 255, alpha or 1)
-  g.draw(atlas.image, quad, x, y, 0, size / 96, size / 96)
+  g.draw(atlas.pages and atlas.pages[name] or atlas.image, quad, x, y, 0, size / 96, size / 96)
 end
 
 return Icons

@@ -1,0 +1,398 @@
+From f781d8c99513b200f810f4cef92f9c12d238b9f6 Mon Sep 17 00:00:00 2001
+From: Aaron Morgan <morganaaron.mail@icloud.com>
+Date: Mon, 5 Oct 2026 15:55:33 -0500
+Subject: [PATCH] 3DS: implement queueable sources, decode PNG, fix static
+ source double free
+
+- love.audio.newQueueableSource was an empty stub and not registered; implement it
+  and the ndsp-backed queue (slots, pending submit on play, starvation stop)
+- clamp the queue constructor's buffer count (it overran a 2-slot array)
+- register PNGHandler on 3DS so love.graphics.newImage loads .png
+- static sources freed their shared SoundData buffer in the destructor
+- restore setVolume after ndspChnReset on play
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01YUDdWjWFXzUKoBPqr1pYpC
+---
+ include/objects/imagedata/imagedata.tcc       |   1 +
+ platform/ctr/include/objects/source_ext.hpp   |  19 ++
+ .../ctr/source/modules/imagemodule_ext.cpp    |   2 +
+ platform/ctr/source/objects/source_ext.cpp    | 177 ++++++++++++++++--
+ source/modules/audio/wrap_audio.cpp           |  29 ++-
+ 5 files changed, 210 insertions(+), 18 deletions(-)
+
+diff --git a/include/objects/imagedata/imagedata.tcc b/include/objects/imagedata/imagedata.tcc
+index dce31cf..2cfa70f 100644
+--- a/include/objects/imagedata/imagedata.tcc
++++ b/include/objects/imagedata/imagedata.tcc
+@@ -16,6 +16,7 @@
+ #include <utilities/threads/threads.hpp>
+ 
+ #if defined(__3DS__)
++    #include <utilities/formathandler/types/pnghandler.hpp>
+     #include <utilities/formathandler/types/t3xhandler.hpp>
+ #else
+     #include <utilities/formathandler/types/astchandler.hpp>
+diff --git a/platform/ctr/include/objects/source_ext.hpp b/platform/ctr/include/objects/source_ext.hpp
+index fa575da..7344333 100644
+--- a/platform/ctr/include/objects/source_ext.hpp
++++ b/platform/ctr/include/objects/source_ext.hpp
+@@ -6,7 +6,9 @@
+ #include <objects/data/sounddata/sounddata.hpp>
+ #include <utilities/decoder/decoder.hpp>
+ 
++#include <deque>
+ #include <queue>
++#include <vector>
+ 
+ namespace love
+ {
+@@ -90,12 +92,29 @@ namespace love
+       private:
+         static constexpr size_t MAX_BUFFERS = 2;
+ 
++        /* queueable sources: LÖVE's defaults (8 buffers unless asked, at most 64) */
++        static constexpr int DEFAULT_QUEUE_BUFFERS = 8;
++        static constexpr int MAX_QUEUE_BUFFERS     = 64;
++
+         void Reset();
+ 
++        void InitQueueBuffers(int count);
++
++        void ResetQueueBuffers();
++
++        void SubmitPendingAtomic();
++
++        bool IsQueueSlotFree(size_t index) const;
++
+         int StreamAtomic(ndspWaveBuf& buffer, Decoder* decoder);
+ 
+         AudioPool* pool;
+ 
+         ndspWaveBuf buffers[2];
++
++        /* TYPE_QUEUE storage: one wave buffer per slot, each with its own linear-heap PCM */
++        std::vector<ndspWaveBuf> queueBuffers;
++        std::vector<size_t> queueCapacity;
++        std::deque<size_t> queuePending;
+     };
+ } // namespace love
+diff --git a/platform/ctr/source/modules/imagemodule_ext.cpp b/platform/ctr/source/modules/imagemodule_ext.cpp
+index 2cf59a9..f0dd081 100644
+--- a/platform/ctr/source/modules/imagemodule_ext.cpp
++++ b/platform/ctr/source/modules/imagemodule_ext.cpp
+@@ -4,5 +4,7 @@ using namespace love;
+ 
+ ImageModule::ImageModule()
+ {
++    /* PNG first: Gen1Recomp's ROM-derived cache and UI art are PNGs */
++    this->formatHandlers.push_back(new PNGHandler());
+     this->formatHandlers.push_back(new T3XHandler());
+ }
+diff --git a/platform/ctr/source/objects/source_ext.cpp b/platform/ctr/source/objects/source_ext.cpp
+index 4e4f8c3..37e408c 100644
+--- a/platform/ctr/source/objects/source_ext.cpp
++++ b/platform/ctr/source/objects/source_ext.cpp
+@@ -62,16 +62,58 @@ Source<Console::CTR>::Source(AudioPool* pool, int sampleRate, int bitDepth, int
+     this->sampleRate    = sampleRate;
+     this->channels      = channels;
+     this->bitDepth      = bitDepth;
+-    this->bufferCount   = buffers;
+     this->samplesOffset = 0;
+ 
+-    if (buffers < 1 || (size_t)buffers > Source::MAX_BUFFERS)
+-        buffers = MAX_BUFFERS;
++    std::fill_n(this->buffers, 2, ndspWaveBuf {});
+ 
+-    std::fill_n(this->buffers, this->bufferCount, ndspWaveBuf {});
++    this->InitQueueBuffers(buffers);
++}
+ 
+-    for (size_t index = 0; index < (size_t)this->bufferCount; index++)
+-        this->buffers[index].status = NDSP_WBUF_DONE;
++void Source<Console::CTR>::InitQueueBuffers(int count)
++{
++    if (count < 1)
++        count = DEFAULT_QUEUE_BUFFERS;
++    else if (count > MAX_QUEUE_BUFFERS)
++        count = MAX_QUEUE_BUFFERS;
++
++    this->bufferCount = count;
++
++    this->queueBuffers.assign(count, ndspWaveBuf {});
++    this->queueCapacity.assign(count, 0);
++    this->queuePending.clear();
++
++    for (auto& buffer : this->queueBuffers)
++        buffer.status = NDSP_WBUF_DONE;
++}
++
++/* ndspChnReset / ndspChnWaveBufClear unlink buffers without updating their status */
++void Source<Console::CTR>::ResetQueueBuffers()
++{
++    this->queuePending.clear();
++
++    for (auto& buffer : this->queueBuffers)
++        buffer.status = NDSP_WBUF_DONE;
++}
++
++bool Source<Console::CTR>::IsQueueSlotFree(size_t index) const
++{
++    const auto status = this->queueBuffers[index].status;
++    if (status != NDSP_WBUF_DONE && status != NDSP_WBUF_FREE)
++        return false;
++
++    return std::find(this->queuePending.begin(), this->queuePending.end(), index) ==
++           this->queuePending.end();
++}
++
++void Source<Console::CTR>::SubmitPendingAtomic()
++{
++    while (!this->queuePending.empty())
++    {
++        const size_t index = this->queuePending.front();
++        this->queuePending.pop_front();
++
++        ::DSP::Instance().ChannelAddBuffer(this->channel, &this->queueBuffers[index]);
++    }
+ }
+ 
+ Source<Console::CTR>::Source(const Source& other) : Source<>(other.sourceType), pool(other.pool)
+@@ -90,9 +132,15 @@ Source<Console::CTR>::Source(const Source& other) : Source<>(other.sourceType),
+             this->decoder.Set(other.decoder->Clone(), Acquire::NORETAIN);
+     }
+ 
+-    std::fill_n(this->buffers, this->bufferCount, ndspWaveBuf {});
++    std::fill_n(this->buffers, 2, ndspWaveBuf {});
+ 
+-    for (size_t index = 0; index < this->bufferCount; index++)
++    if (this->sourceType == TYPE_QUEUE)
++    {
++        this->InitQueueBuffers(other.bufferCount);
++        return;
++    }
++
++    for (size_t index = 0; index < (size_t)std::min<int>(this->bufferCount, 2); index++)
+     {
+         if (this->sourceType == TYPE_STREAM)
+             this->buffers[index].data_pcm16 = (int16_t*)linearAlloc(this->decoder->GetSize());
+@@ -105,7 +153,16 @@ Source<Console::CTR>::~Source()
+ {
+     this->Stop();
+ 
+-    for (auto& buffer : this->buffers)
++    if (this->sourceType == TYPE_STREAM)
++    {
++        for (auto& buffer : this->buffers)
++        {
++            if (buffer.data_pcm16)
++                linearFree(buffer.data_pcm16);
++        }
++    }
++
++    for (auto& buffer : this->queueBuffers)
+     {
+         if (buffer.data_pcm16)
+             linearFree(buffer.data_pcm16);
+@@ -218,7 +275,18 @@ bool Source<Console::CTR>::Update()
+             return true;
+         }
+         case TYPE_QUEUE:
+-            break;
++        {
++            if (!this->queuePending.empty())
++                return true;
++
++            for (const auto& buffer : this->queueBuffers)
++            {
++                if (buffer.status == NDSP_WBUF_QUEUED || buffer.status == NDSP_WBUF_PLAYING)
++                    return true;
++            }
++
++            return false;
++        }
+         default:
+             break;
+     }
+@@ -404,12 +472,48 @@ bool Source<Console::CTR>::Queue(void* data, size_t length, int sampleRate, int
+     if (length == 0)
+         return true;
+ 
+-    // ndspWaveBuf buffer {};
+-    // buffer.data_pcm16 = (int16_t*)linearAlloc(length);
+-    // std::memcpy(buffer.data_pcm16, data, length);
++    auto lock = this->pool->Lock();
++
++    size_t slot = this->queueBuffers.size();
++    for (size_t index = 0; index < this->queueBuffers.size(); index++)
++    {
++        if (this->IsQueueSlotFree(index))
++        {
++            slot = index;
++            break;
++        }
++    }
++
++    /* every buffer is in use: same answer LÖVE gives */
++    if (slot == this->queueBuffers.size())
++        return false;
++
++    auto& buffer = this->queueBuffers[slot];
++
++    if (this->queueCapacity[slot] < length)
++    {
++        if (buffer.data_pcm16)
++            linearFree(buffer.data_pcm16);
++
++        buffer.data_pcm16 = (int16_t*)linearAlloc(length);
++        this->queueCapacity[slot] = buffer.data_pcm16 ? length : 0;
++
++        if (!buffer.data_pcm16)
++            throw love::Exception("Out of linear memory for queued audio.");
++    }
+ 
+-    // buffer.nsamples = (int)((length / this->channels) / (this->bitDepth / 8));
+-    // this->queue.push(buffer);
++    std::memcpy(buffer.data_pcm16, data, length);
++    DSP_FlushDataCache(buffer.data_pcm16, length);
++
++    buffer.nsamples = (int)((length / this->channels) / (this->bitDepth / 8));
++    buffer.offset   = 0;
++    buffer.looping  = false;
++    buffer.status   = NDSP_WBUF_FREE;
++
++    if (this->valid)
++        ::DSP::Instance().ChannelAddBuffer(this->channel, &buffer);
++    else
++        this->queuePending.push_back(slot);
+ 
+     return true;
+ }
+@@ -420,6 +524,15 @@ int Source<Console::CTR>::GetFreeBufferCount() const
+         return 0;
+ 
+     size_t count = 0;
++
++    if (this->sourceType == TYPE_QUEUE)
++    {
++        for (size_t index = 0; index < this->queueBuffers.size(); index++)
++            count += this->IsQueueSlotFree(index) ? 1 : 0;
++
++        return count;
++    }
++
+     for (auto& buffer : this->buffers)
+         count += (buffer.status == NDSP_WBUF_DONE) ? 1 : 0;
+ 
+@@ -430,6 +543,9 @@ void Source<Console::CTR>::PrepareAtomic()
+ {
+     this->Reset();
+ 
++    /* ndspChnReset puts the mix back to full volume; keep what setVolume asked for */
++    ::DSP::Instance().ChannelSetVolume(this->channel, this->volume);
++
+     switch (this->sourceType)
+     {
+         case TYPE_STATIC:
+@@ -456,7 +572,20 @@ void Source<Console::CTR>::PrepareAtomic()
+             break;
+         }
+         case TYPE_QUEUE:
+-            break; /* todo */
++        {
++            /* the reset unlinked anything that had been submitted */
++            for (size_t index = 0; index < this->queueBuffers.size(); index++)
++            {
++                const bool pending =
++                    std::find(this->queuePending.begin(), this->queuePending.end(), index) !=
++                    this->queuePending.end();
++
++                if (!pending)
++                    this->queueBuffers[index].status = NDSP_WBUF_DONE;
++            }
++
++            break;
++        }
+         default:
+             break;
+     }
+@@ -499,7 +628,11 @@ void Source<Console::CTR>::TeardownAtomic()
+             break;
+         }
+         case TYPE_QUEUE:
+-            break; /* todo */
++        {
++            /* stop() discards queued audio, as in LÖVE */
++            this->ResetQueueBuffers();
++            break;
++        }
+         default:
+             break;
+     }
+@@ -512,6 +645,16 @@ bool Source<Console::CTR>::PlayAtomic(ndspWaveBuf& waveBuffer)
+ {
+     this->PrepareAtomic();
+ 
++    if (this->sourceType == TYPE_QUEUE)
++    {
++        /* an empty queue still "plays"; Update() releases it on the next pool tick */
++        this->SubmitPendingAtomic();
++        this->samplesOffset = 0;
++        this->valid         = true;
++
++        return true;
++    }
++
+     ::DSP::Instance().ChannelAddBuffer(this->channel, &waveBuffer);
+ 
+     if (this->sourceType != TYPE_STREAM)
+diff --git a/source/modules/audio/wrap_audio.cpp b/source/modules/audio/wrap_audio.cpp
+index ec83e74..0afe941 100644
+--- a/source/modules/audio/wrap_audio.cpp
++++ b/source/modules/audio/wrap_audio.cpp
+@@ -74,7 +74,33 @@ int Wrap_Audio::NewSource(lua_State* L)
+ 
+ int Wrap_Audio::NewQueueableSource(lua_State* L)
+ {
+-    return 0;
++    const int sampleRate  = luaL_checkinteger(L, 1);
++    const int bitDepth    = luaL_checkinteger(L, 2);
++    const int channels    = luaL_checkinteger(L, 3);
++    const int bufferCount = luaL_optinteger(L, 4, 0);
++
++    if (sampleRate <= 0)
++        return luaL_error(L, "Invalid sample rate: %d", sampleRate);
++
++    if (bitDepth != 8 && bitDepth != 16)
++        return luaL_error(L, "Invalid bit depth: %d (must be 8 or 16)", bitDepth);
++
++    if (channels != 1 && channels != 2)
++        return luaL_error(L, "Invalid channel count: %d (must be 1 or 2)", channels);
++
++    ::Source* self = nullptr;
++
++    luax::CatchException(L, [&]() {
++        self = instance()->NewSource(sampleRate, bitDepth, channels, bufferCount);
++    });
++
++    if (!self)
++        return luaL_error(L, "Could not create a queueable source.");
++
++    luax::PushType(L, self);
++    self->Release();
++
++    return 1;
+ }
+ 
+ static std::vector<::Source*> readSourceList(lua_State* L, int stackPosition)
+@@ -182,6 +208,7 @@ static constexpr luaL_Reg functions[] =
+     { "getActiveSourceCount", Wrap_Audio::GetActiveSourceCount },
+     { "getVolume",            Wrap_Audio::GetVolume            },
+     { "newSource",            Wrap_Audio::NewSource            },
++    { "newQueueableSource",   Wrap_Audio::NewQueueableSource   },
+     { "play",                 Wrap_Audio::Play                 },
+     { "pause",                Wrap_Audio::Pause                },
+     { "stop",                 Wrap_Audio::Stop                 },
+-- 
+2.43.0
+

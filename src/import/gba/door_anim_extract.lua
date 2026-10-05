@@ -451,11 +451,13 @@ function DoorAnimExtract.run(rom, cache, opts)
   -- src/field_door.c:396
   local limit = math.max(ENTRY_COUNT, 0)
   for i = 0, limit - 1 do
+    local __skip_continue = false
+    repeat -- Lua 5.1: was `goto continue` (continue)
     local base      = Versions.address(SDOOR_GRAPHICS_OFFSET) + i * ENTRY_STRIDE
     local mid_flags = rom:u32(base)
     local ptr_tiles = rom:u32(base + 4)
     local ptr_pal   = rom:u32(base + 8)
-    if ptr_tiles == 0 then break end
+    if ptr_tiles == 0 then do __skip_continue = true break end end
 
     local mid       = band(mid_flags, 0xFFFF)
     local sound_id  = band(rshift(mid_flags, 16), 0xFF)
@@ -467,7 +469,7 @@ function DoorAnimExtract.run(rom, cache, opts)
     local pal_off   = rom:ptrOffset(ptr_pal)
     if not (tiles_off and pal_off) then
       print(string.format("[door_extract] bad ptr for entry %d (%s); skipping", i, name))
-      goto continue
+      do break end
     end
 
     local pal_nums = {}
@@ -502,7 +504,8 @@ function DoorAnimExtract.run(rom, cache, opts)
     manifest_by_mid[mid] = entry
     manifest_entries[#manifest_entries + 1] = entry
 
-    ::continue::
+    until true
+    if __skip_continue then break end
   end
 
   rom:clearCache()

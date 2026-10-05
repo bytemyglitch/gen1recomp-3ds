@@ -8,6 +8,12 @@
 --     opens the editor on that slot's file, and restores the launcher when
 --     the editor's Close button is pressed (openEditor / closeEditor below)
 
+-- Nintendo 3DS (LÖVE Potion): stand in for the LÖVE 11 desktop calls the
+-- 3DS build lacks before any other module can reach for them.  install()
+-- returns false, and changes nothing, on every other platform.
+local Compat3DS = require("src.core.Compat3DS")
+local IS_3DS = Compat3DS.install()
+
 local SwitchDiagnostics = require("src.debug.SwitchDiagnostics")
 
 -- Global emergency quit: holding Start + Select for 5 seconds forcefully terminates LOVE.
@@ -1636,6 +1642,8 @@ function love.filedropped(file)
 end
 
 local function pacingEnabled()
+  -- The 3DS presents on a fixed 60 Hz vsync; software pacing only adds sleeps.
+  if IS_3DS then return false end
   if os.getenv("POKEPORT_AUTOPILOT") then return false end
   if os.getenv("POKEPORT_DRIVER") then return false end
   if os.getenv("POKEPORT_IMPORT_ONLY") == "1" then return false end
@@ -1723,7 +1731,11 @@ function love.run()
         elseif name == "resize" then
           PresentSync.onDisplayChange()
         end
-        love.handlers[name](a, b, c, d, e, f)
+        -- 3DS: bottom-screen touches are not taps on the game's top-screen
+        -- layout (see Compat3DS.DROPPED_EVENTS).
+        if not (IS_3DS and Compat3DS.dropsEvent(name)) and love.handlers[name] then
+          love.handlers[name](a, b, c, d, e, f)
+        end
       end
     end
 
@@ -1761,12 +1773,18 @@ function love.run()
     end
 
     if visible and love.graphics and love.graphics.isActive() then
-      love.graphics.origin()
-      love.graphics.clear(love.graphics.getBackgroundColor())
-      if love.draw then love.draw() end
-      PresentSync.waitBeforePresent()
-      love.graphics.present()
-      PresentSync.notePresent()
+      if IS_3DS then
+        -- Two screens: the game on the top one, the bottom one cleared.
+        -- present() waits on the hardware vsync, so no PresentSync probing.
+        Compat3DS.drawFrame(love.draw and function() love.draw() end)
+      else
+        love.graphics.origin()
+        love.graphics.clear(love.graphics.getBackgroundColor())
+        if love.draw then love.draw() end
+        PresentSync.waitBeforePresent()
+        love.graphics.present()
+        PresentSync.notePresent()
+      end
     end
 
     PresentSync.applyFixedStepPeriod()

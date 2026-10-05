@@ -187,11 +187,14 @@ function LauncherView.update(imp, dt)
     imp._themeVideoOptions = ok and type(options) == "table" and options or {}
   end
   local videoEnabled = imp._themeVideoOptions.themeVideoBg ~= false
-  if videoEnabled and not imp._themeVideo then
+  if videoEnabled and not imp._themeVideo and not imp._themeVideoFailed then
     local ok, player = pcall(function()
       return require("src.import.LauncherThemeVideo").new()
     end)
-    if ok then imp._themeVideo = player end
+    -- A host with no video decoder (Nintendo 3DS) fails the same way every
+    -- time; try once instead of reopening the file every frame.
+    if ok and player then imp._themeVideo = player
+    else imp._themeVideoFailed = true end
   elseif not videoEnabled and imp._themeVideo then
     imp._themeVideo:release()
     imp._themeVideo = nil
@@ -3715,12 +3718,17 @@ local function buildFooter(imp, m, y)
   Theme.fill(m.x, y, m.w, 1, PAL.line, Theme.A.hairline)
   local cy = y + math.floor(8 * m.s)
   -- The BCG mark is dark ink; invert it for the black field.
-  imp.invertShader = imp.invertShader or love.graphics.newShader([[
+  -- false = tried and unavailable (Nintendo 3DS has no shaders): the mark is
+  -- then drawn un-inverted rather than taking the launcher down.
+  if imp.invertShader == nil then
+    local okShader, shader = pcall(love.graphics.newShader, [[
     vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
       vec4 p = Texel(tex, tc);
       return vec4((vec3(1.0) - p.rgb) * color.rgb, p.a * color.a);
     }
   ]])
+    imp.invertShader = okShader and shader or false
+  end
   local bw, bh = imp.bcg:getDimensions()
   local scale = math.min((130 * m.s) / bw, (22 * m.s) / bh)
   local dw, dh = bw * scale, bh * scale
@@ -3742,7 +3750,7 @@ local function buildFooter(imp, m, y)
     Theme.strokeRounded(bx - 3, my - 3, dw + 6, dh + 6, PAL.ink, 0.35 + 0.25 * glowPulse, 2.5, 4)
     Theme.strokeRounded(bx, my, dw, dh, PAL.ink, 0.95 + 0.05 * glowPulse, 2, 2)
   end
-  love.graphics.setShader(imp.invertShader)
+  love.graphics.setShader(imp.invertShader or nil)
   love.graphics.setColor(1, 1, 1, (hot or isFocused) and 1 or 0.85)
   love.graphics.draw(imp.bcg, Theme.snap(bx), Theme.snap(my), 0, scale, scale)
   love.graphics.setShader()

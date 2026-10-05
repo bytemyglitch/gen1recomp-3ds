@@ -337,6 +337,9 @@ function Theme.versionRail(x, y, w, h, colors)
   for px = 0, w - 1 do
     local pos = ((px / w - phase) % 1) * #railColors
     local index = math.floor(pos)
+    -- (tiny negative) % 1 can round to exactly 1.0, which puts pos one
+    -- past the last color; that is the same point as the start.
+    if index >= #railColors then index, pos = 0, 0 end
     local a = railColors[index + 1]
     local b = railColors[(index + 1) % #railColors + 1]
     local t = pos - index

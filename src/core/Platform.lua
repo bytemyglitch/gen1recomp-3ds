@@ -8,6 +8,9 @@ local function compute()
   local osName = (love and love.system and love.system.getOS and love.system.getOS())
     or "Unknown"
   local nx = osName == "NX"
+  -- Nintendo 3DS under LÖVE Potion reports getOS() == "Horizon" (as its
+  -- Switch build does too), so the console name is what tells them apart.
+  local n3ds = love ~= nil and love._console == "3DS"
   local uwp = osName == "UWP"
   local mobile = osName == "Android" or osName == "iOS"
   local nativePicker = love and love.system
@@ -17,15 +20,16 @@ local function compute()
   return {
     os = osName,
     nx = nx,
+    n3ds = n3ds,
     uwp = uwp,
     mobile = mobile,
-    console = nx or uwp,
+    console = nx or uwp or n3ds,
     hasNativePicker = nativePicker,
     canSpawnProcess = osName == "OS X" or osName == "Windows" or osName == "Linux",
-    romImportMode = nx and "save-directory"
+    romImportMode = (nx or n3ds) and "save-directory"
       or (nativePicker and "native-picker")
       or "desktop",
-    networkValidated = not nx and not uwp,
+    networkValidated = not nx and not uwp and not n3ds,
     -- networkValidated is the self-updater's gate and stays a per-platform
     -- policy call: a console package cannot replace itself on disk, so that
     -- answer never depends on whether a transport exists.  Fetching a mod
@@ -36,7 +40,7 @@ local function compute()
     -- (#597).  The UWP LOVE backend does not export that bridge yet, so this
     -- still resolves false on Xbox and the launcher still says so, but the
     -- day the backend grows one, nothing here or in RomImporter has to change.
-    canFetchRemote = (not nx and not uwp) or nativeHttp,
+    canFetchRemote = ((not nx and not uwp) or nativeHttp) and not n3ds,
   }
 end
 
@@ -47,6 +51,10 @@ end
 
 function Platform.isNX()
   return Platform.detect().nx
+end
+
+function Platform.is3DS()
+  return Platform.detect().n3ds
 end
 
 function Platform.isUWP()

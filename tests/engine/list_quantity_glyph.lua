@@ -24,7 +24,7 @@ package.loaded["src.ui.ListMenu"] = nil
 package.loaded["src.ui.Theme"] = nil
 local ListMenu = require("src.ui.ListMenu")
 
-local TIMES = "\xc3\x97"
+local TIMES = "\195\151"
 
 local function found(kind, pred)
   for _, c in ipairs(calls) do
