@@ -28,6 +28,11 @@ require("love.timer")
 require("love.sound")
 require("love.filesystem")
 
+-- Nintendo 3DS: give this thread state the same stand-ins as the main one.
+pcall(function()
+  assert(love.filesystem.load("src/core/Compat3DS.lua"))().installThread()
+end)
+
 local jitEnabled = false
 if os.getenv("POKEPORT_AUDIO_JIT") == "1" and jit and jit.on then
   pcall(jit.on)

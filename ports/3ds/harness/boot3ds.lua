@@ -211,6 +211,26 @@ local okC, errC = xpcall(function()
     CacheContract.formatFor("red"):sub(-11) == "3ds-tiled1:"
     and not CacheContract.markerMatches("red", "rom-cache-v12-gen1:"
       .. require("src.core.GameVersion").info("red").sha1))
+  -- The ROM importer's write path, as its worker thread runs it: decode
+  -- Game Boy 2bpp tiles into an ImageData, encode PNG, stream into the cache.
+  do
+    local Compat3DS = require("src.core.Compat3DS")
+    local savedNewFile = love.filesystem.newFile
+    love.filesystem.newFile = nil              -- a fresh thread state lacks it
+    Compat3DS.installThread()
+    local ImageWriter = require("src.import.ImageWriter")
+    local raw = {}
+    for i = 1, 16 do raw[i] = (i * 37) % 256 end
+    local okW, errW = pcall(function()
+      local image = ImageWriter.decode2bpp(raw, 8, 8)
+      ImageWriter.save(image, "assets/generated/compat_probe.png")
+    end)
+    local written = love.filesystem.read("assets/generated/compat_probe.png")
+    check("importer can encode and write a generated PNG from a worker-thread state",
+      okW and written and written:sub(1, 4) == "\137PNG", errW)
+    love.filesystem.remove("assets/generated/compat_probe.png")
+    if savedNewFile then love.filesystem.newFile = savedNewFile end
+  end
   check("launcher lists Gen 1 only", #require("src.core.GameVersion").ORDER == 3)
   check("boot never loads the Emerald symbol tables",
     package.loaded["src.import.gba.syms.emerald"] == nil

@@ -1,4 +1,4 @@
-From a3828b5a3d42af1273d9ed47c69daf3e8fffe211 Mon Sep 17 00:00:00 2001
+From 24a7abca48da168f819ca42ed140eb0f324738d8 Mon Sep 17 00:00:00 2001
 From: Aaron Morgan <morganaaron.mail@icloud.com>
 Date: Mon, 5 Oct 2026 15:55:33 -0500
 Subject: [PATCH] 3DS: implement queueable sources, decode PNG, fix static
@@ -15,15 +15,17 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01YUDdWjWFXzUKoBPqr1pYpC
 ---
  include/objects/imagedata/imagedata.tcc       |   1 +
+ .../ctr/include/objects/imagedata_ext.hpp     |  14 +-
  platform/ctr/include/objects/source_ext.hpp   |  19 ++
  .../ctr/source/modules/imagemodule_ext.cpp    |   2 +
+ platform/ctr/source/objects/imagedata_ext.cpp |  13 +-
  platform/ctr/source/objects/source_ext.cpp    | 177 ++++++++++++++++--
  .../source/objects/truetyperasterizer_ext.cpp |  78 +++++++-
  source/modules/audio/wrap_audio.cpp           |  29 ++-
  source/modules/filesystem/wrap_filesystem.cpp |  10 +-
  source/objects/imagedata/imagedata.cpp        |  75 +++++++-
  source/objects/thread/luathread.cpp           |   5 +
- 9 files changed, 368 insertions(+), 28 deletions(-)
+ 11 files changed, 389 insertions(+), 34 deletions(-)
 
 diff --git a/include/objects/imagedata/imagedata.tcc b/include/objects/imagedata/imagedata.tcc
 index dce31cf..2cfa70f 100644
@@ -37,6 +39,38 @@ index dce31cf..2cfa70f 100644
      #include <utilities/formathandler/types/t3xhandler.hpp>
  #else
      #include <utilities/formathandler/types/astchandler.hpp>
+diff --git a/platform/ctr/include/objects/imagedata_ext.hpp b/platform/ctr/include/objects/imagedata_ext.hpp
+index 9f7b1da..198f409 100644
+--- a/platform/ctr/include/objects/imagedata_ext.hpp
++++ b/platform/ctr/include/objects/imagedata_ext.hpp
+@@ -5,6 +5,9 @@
+ #include <common/math.hpp>
+ #include <common/strongreference.hpp>
+ 
++#include <string>
++#include <string_view>
++
+ namespace love
+ {
+     template<>
+@@ -23,11 +26,12 @@ namespace love
+ 
+         void Paste(ImageData* data, int x, int y, Rect& source);
+ 
++        /*
++        ** Was a stub that always threw.  The shared encoder converts the 3DS
++        ** tiled layout back to plain rows first (imagedata.cpp), and the PNG
++        ** handler is registered on 3DS, so encoding works like elsewhere.
++        */
+         FileData* Encode(FormatHandler::EncodedFormat format, std::string_view filename,
+-                         bool writeFile) const
+-        {
+-            throw love::Exception("This platform does not support encoding images.");
+-            return nullptr;
+-        }
++                         bool writeFile) const;
+     };
+ } // namespace love
 diff --git a/platform/ctr/include/objects/source_ext.hpp b/platform/ctr/include/objects/source_ext.hpp
 index fa575da..7344333 100644
 --- a/platform/ctr/include/objects/source_ext.hpp
@@ -93,6 +127,28 @@ index 2cf59a9..f0dd081 100644
 +    this->formatHandlers.push_back(new PNGHandler());
      this->formatHandlers.push_back(new T3XHandler());
  }
+diff --git a/platform/ctr/source/objects/imagedata_ext.cpp b/platform/ctr/source/objects/imagedata_ext.cpp
+index a719edc..9595399 100644
+--- a/platform/ctr/source/objects/imagedata_ext.cpp
++++ b/platform/ctr/source/objects/imagedata_ext.cpp
+@@ -53,4 +53,15 @@ void ImageData<Console::CTR>::Paste(ImageData* source, int x, int y, Rect& sourc
+             // clang-format on
+         }
+     }
+-}
+\ No newline at end of file
++}
++
++template<>
++FileData* ImageData<Console::ALL>::Encode(FormatHandler::EncodedFormat format,
++                                          const char* filename, bool writeFile) const;
++
++FileData* ImageData<Console::CTR>::Encode(FormatHandler::EncodedFormat format,
++                                          std::string_view filename, bool writeFile) const
++{
++    const std::string name(filename);
++    return ImageData<Console::ALL>::Encode(format, name.c_str(), writeFile);
++}
 diff --git a/platform/ctr/source/objects/source_ext.cpp b/platform/ctr/source/objects/source_ext.cpp
 index 4e4f8c3..37e408c 100644
 --- a/platform/ctr/source/objects/source_ext.cpp

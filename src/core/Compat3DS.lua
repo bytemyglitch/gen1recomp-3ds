@@ -315,6 +315,18 @@ function Compat3DS.install()
   return true
 end
 
+-- Worker threads (ROM import, music synthesis) run in their own Lua state
+-- with only the love modules they require themselves, so they need the
+-- language and filesystem/system stand-ins but none of the display ones.
+function Compat3DS.installThread()
+  if not Compat3DS.isActive() then return false end
+  installLanguage()
+  installFilesystem()
+  installSystem()
+  installArg()
+  return true
+end
+
 ---------------------------------------------------------------------------
 -- frame and events
 ---------------------------------------------------------------------------

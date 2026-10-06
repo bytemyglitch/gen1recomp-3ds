@@ -27,6 +27,11 @@ table.insert(package.searchers or package.loaders, 1, function(modname)
   end
 end)
 
+-- Nintendo 3DS: this thread's Lua state has none of the main state's
+-- stand-ins (love.filesystem.newFile for streaming cache writes, the 5.2-style
+-- load).  A no-op on every other platform.
+pcall(function() require("src.core.Compat3DS").installThread() end)
+
 local version, prefix, romData, progressName, resultName, romSha1 = ...
 
 local progressChannel = love.thread and love.thread.getChannel and love.thread.getChannel(progressName)

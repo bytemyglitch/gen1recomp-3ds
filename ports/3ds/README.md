@@ -74,6 +74,9 @@ LÖVE Potion (`lovepotion-3ds.patch`):
   Every decoded image came out scrambled, and every PNG the ROM importer
   wrote was scrambled on disk. Decoding and encoding now convert at the
   boundary; caches imported before this fix are flagged for one re-import.
+- `ImageData:encode` on 3DS was a stub that always threw ("This platform does
+  not support encoding images"), so the ROM import could not save its art.
+  It now uses the shared PNG encoder.
 - Worker threads never got the `bit` library (only the main Lua state
   did), so the music synthesizer thread failed at `require("bit")`.
 
