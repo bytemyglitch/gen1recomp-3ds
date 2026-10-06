@@ -187,6 +187,10 @@ local okC, errC = xpcall(function()
   check("TrueType fonts fall back to the system font (no CFNT crash)", okTtf and okPath)
   local okPng = pcall(love.graphics.newImage, "assets/logo/logo.png")
   check("PNG paths load as PNG, not rewritten to .t3x", okPng)
+  check("launcher lists Gen 1 only", #require("src.core.GameVersion").ORDER == 3)
+  check("boot never loads the Emerald symbol tables",
+    package.loaded["src.import.gba.syms.emerald"] == nil
+    and package.loaded["src.import.gba.versions_text_emerald"] == nil)
   check("text escapes decode the same as LuaJIT",
     ("POK\195\169"):byte(4) == 0xC3 and ("\195\151"):byte(2) == 0x97)
 end, traceback)

@@ -40,6 +40,8 @@ The bottom screen stays black, and touches on it are ignored.
 
 ## What differs from the PC version
 
+- **Gen 1 only.** The 3DS launcher lists Red, Blue and Yellow.
+
 - **No shader effects.** The 3DS GPU cannot run GLSL, so COLORS, TILT, ZOOM,
   GBC FX and SHADER FX are off. The game is drawn in the original grayscale.
 - **Performance tier is locked to LOW**, so music is synthesized at 22,050 Hz.
@@ -82,6 +84,10 @@ Gen1Recomp:
   became decimal (on 5.1, "POKé" and "×" printed as literal `xc3xa9`), the
   GBA importers no longer use `goto`, the version rail can no longer index
   past its last color, and a missing video decoder is no longer retried every frame.
+- Boot time: the launcher used to check all eleven game versions at startup,
+  and the Gen 3 checks parsed 2.7 MB of Emerald symbol tables. Boot now
+  compiles 2.8 MB of Lua instead of 7.5 MB, and CI ships that Lua
+  precompiled to bytecode (`precompile.sh`) so the console skips the parser.
 - The launcher's icon atlases (1,728 and 3,168 px wide) are cut into pages
   under the 3DS GPU's 1,024 px texture limit.
 

@@ -199,6 +199,14 @@ local NO_FIXES = {}
 -- Launcher column order.
 GameVersion.ORDER = { "red", "blue", "yellow", "gold", "silver", "crystal", "firered", "leafgreen", "ruby", "sapphire", "emerald" }
 
+-- Nintendo 3DS: Gen 1 only.  Every ORDER entry is checked for an imported
+-- cache at launcher boot, and a Gen 3 check composes its file list from the
+-- multi-megabyte GBA symbol tables -- most of a minute of plain-Lua parsing
+-- on the console, for games it cannot run anyway.
+if type(love) == "table" and love._console == "3DS" then
+  GameVersion.ORDER = { "red", "blue", "yellow" }
+end
+
 GameVersion.current = "red"
 
 function GameVersion.set(id)

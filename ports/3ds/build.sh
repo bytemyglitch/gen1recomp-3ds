@@ -3,6 +3,7 @@
 #
 #   ports/3ds/build.sh                       build patched LÖVE Potion, then fuse
 #   ports/3ds/build.sh --lovepotion F.3dsx   fuse with a LÖVE Potion you already built
+#   ports/3ds/build.sh --bytecode DIR        ship Lua bytecode from precompile.sh
 #
 # Output: dist/3ds/gen1recomp.3dsx  -> copy to sdmc:/3ds/gen1recomp/gen1recomp.3dsx
 #
@@ -23,6 +24,7 @@ PATCH="$ROOT/ports/3ds/lovepotion-3ds.patch"
 LOVEPOTION_REPO="https://github.com/lovebrew/lovepotion.git"
 LOVEPOTION_REF="906511d"   # dev/3.0, Apr 26 2026 (3.0.2 line)
 LOVEPOTION_3DSX=""
+BYTECODE=""
 
 say()  { printf '\033[1;32m==>\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -30,6 +32,7 @@ fail() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --lovepotion) LOVEPOTION_3DSX="$2"; shift 2 ;;
+    --bytecode) BYTECODE="$2"; shift 2 ;;
     -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) fail "unknown argument: $1" ;;
   esac
@@ -74,6 +77,25 @@ fi
 
 say "packing game.love"
 "$ROOT/scripts/pack_love.sh" --output "$WORK/game.love" --listing "$WORK/love-listing.txt" >/dev/null
+
+# Bytecode only loads in a Lua built with the same number type; LÖVE
+# Potion links devkitPro's 3DS Lua 5.1, so check its luaconf.h first.
+console_lua_is_double() {
+  local conf
+  conf="$(find "${DEVKITPRO:-/opt/devkitpro}/portlibs/3ds/include" -name luaconf.h -print -quit 2>/dev/null)"
+  [ -n "$conf" ] || return 1
+  grep -Eq '^#define[[:space:]]+LUA_NUMBER[[:space:]]+double' "$conf"
+}
+
+if [ -n "$BYTECODE" ]; then
+  [ -d "$BYTECODE" ] || fail "no bytecode directory: $BYTECODE"
+  if console_lua_is_double; then
+    say "replacing Lua sources in game.love with precompiled bytecode"
+    (cd "$BYTECODE" && zip -q -r "$WORK/game.love" .)
+  else
+    say "WARNING: could not confirm the 3DS Lua uses double numbers; shipping Lua source"
+  fi
+fi
 
 OUT="$DIST/gen1recomp.3dsx"
 cat "$LOVEPOTION_3DSX" "$WORK/game.love" > "$OUT"

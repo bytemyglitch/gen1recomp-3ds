@@ -24,9 +24,24 @@ jobs:
       - name: Run the 3DS boot harness
         run: ports/3ds/harness/run.sh 600
 
+  bytecode:
+    name: Precompile Lua for the 3DS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 32-bit compiler for luac
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-multilib
+      - name: Compile and verify bytecode
+        run: ports/3ds/precompile.sh .bazinga/3ds/bytecode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lua-bytecode
+          path: .bazinga/3ds/bytecode
+          include-hidden-files: true
+
   build:
     name: Build gen1recomp.3dsx
-    needs: harness
+    needs: [harness, bytecode]
     runs-on: ubuntu-latest
     container:
       image: docker://devkitpro/devkitarm
@@ -35,10 +50,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Tools for packing
         run: apt-get update -qq && apt-get install -y -qq zip unzip git python3
+      - uses: actions/download-artifact@v4
+        with:
+          name: lua-bytecode
+          path: .bazinga/3ds/bytecode
       - name: Build patched LÖVE Potion and fuse the game
         run: |
           git config --global --add safe.directory '*'
-          ports/3ds/build.sh
+          ports/3ds/build.sh --bytecode .bazinga/3ds/bytecode
       - name: Decode crash dumps from ports/3ds/crashdumps
         if: hashFiles('ports/3ds/crashdumps/*.dmp') != ''
         run: |
