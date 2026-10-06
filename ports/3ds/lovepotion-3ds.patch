@@ -1,4 +1,4 @@
-From caf5b38306c94a9d93634922ad120a4d3c69f86f Mon Sep 17 00:00:00 2001
+From 5fc38c0821f9e72c84835040223c401f35071257 Mon Sep 17 00:00:00 2001
 From: Aaron Morgan <morganaaron.mail@icloud.com>
 Date: Mon, 5 Oct 2026 15:55:33 -0500
 Subject: [PATCH] 3DS: implement queueable sources, decode PNG, fix static
@@ -21,7 +21,8 @@ Claude-Session: https://claude.ai/code/session_01YUDdWjWFXzUKoBPqr1pYpC
  .../source/objects/truetyperasterizer_ext.cpp |  78 +++++++-
  source/modules/audio/wrap_audio.cpp           |  29 ++-
  source/modules/filesystem/wrap_filesystem.cpp |  10 +-
- 7 files changed, 290 insertions(+), 26 deletions(-)
+ source/objects/thread/luathread.cpp           |   5 +
+ 8 files changed, 295 insertions(+), 26 deletions(-)
 
 diff --git a/include/objects/imagedata/imagedata.tcc b/include/objects/imagedata/imagedata.tcc
 index dce31cf..2cfa70f 100644
@@ -537,6 +538,26 @@ index 9c9efec..6691302 100644
  
          file = instance()->OpenFile(filename.c_str(), File::MODE_CLOSED);
      }
+diff --git a/source/objects/thread/luathread.cpp b/source/objects/thread/luathread.cpp
+index d229e36..ac573cd 100644
+--- a/source/objects/thread/luathread.cpp
++++ b/source/objects/thread/luathread.cpp
+@@ -1,3 +1,4 @@
++#include <common/luax.hpp>
+ #include <common/module.hpp>
+ 
+ #include <modules/event/event.hpp>
+@@ -23,6 +24,10 @@ void LuaThread::ThreadFunction()
+     lua_State* L = luaL_newstate();
+     luaL_openlibs(L);
+ 
++    /* the main state gets LuaBitOp in RunLOVE; threads need it just as much */
++    luaopen_bit(L);
++    lua_pop(L, 1);
++
+     luax::Preload(L, love::Initialize, "love");
+     luax::Require(L, "love");
+     lua_pop(L, 1);
 -- 
 2.43.0
 

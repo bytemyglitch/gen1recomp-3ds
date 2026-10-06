@@ -69,6 +69,8 @@ LÖVE Potion (`lovepotion-3ds.patch`):
   handful of text sizes the allocation failed and the console crashed
   (Luma3DS data abort in `memcpy`). Fonts built from the same data now share
   one copy, and non-CFNT data raises a Lua error instead of crashing.
+- Worker threads never got the `bit` library (only the main Lua state
+  did), so the music synthesizer thread failed at `require("bit")`.
 
 Gen1Recomp:
 
