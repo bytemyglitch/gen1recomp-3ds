@@ -215,6 +215,20 @@ local function installWindow()
       refreshrate = 60, x = 0, y = 0,
     }
   end)
+  -- The 3DS screens never change size, but LÖVE Potion's setMode tears down
+  -- and re-allocates every screen framebuffer in VRAM.  With the game's
+  -- canvases already resident that allocation fails ("Failed to allocate
+  -- framebuffer left") and the top screen is left broken -- the console's
+  -- off-centre half-black picture.  Boot has already set the only mode there
+  -- is, so later calls (launcher window restore, FAITHFUL RATIO, the editor)
+  -- succeed without touching the hardware.
+  if w.setMode and not Compat3DS._setModeWrapped then
+    Compat3DS._setModeWrapped = true
+    Compat3DS._realSetMode = w.setMode
+    w.setMode = function() return true end
+    if w.updateMode then w.updateMode = function() return true end end
+    Compat3DS.stubbed[#Compat3DS.stubbed + 1] = "window.setMode (fixed screen, no framebuffer rebuild)"
+  end
   stub("window", w, "getDesktopDimensions", function() return W, H end)
   stub("window", w, "getSafeArea", function() return 0, 0, W, H end)
   stub("window", w, "setFullscreen", returnsTrue)

@@ -786,7 +786,9 @@ function Mock.install(opts)
   -- window -------------------------------------------------------------------
   module("window", {
     isOpen = function() return true end,
-    setMode = function() return true end,
+    -- LÖVE Potion rebuilds every screen framebuffer here; count calls so the
+    -- harness can insist the game never does it after boot
+    setMode = function() Mock.setModeCalls = (Mock.setModeCalls or 0) + 1 return true end,
     setTitle = function() end,
     setIcon = function() return true end,
   })

@@ -88,6 +88,9 @@ Gen1Recomp:
   and LÖVE Potion's Lua 5.1 lacks. On every other platform it does nothing.
 - TrueType fonts can't be used on 3DS: its rasterizer reads only `.bcfnt`
   and crashes on anything else. The launcher's TTF faces use the system font.
+- `love.window.setMode` is a no-op on 3DS. LÖVE Potion rebuilds every screen
+  framebuffer on each call; with the game's canvases in VRAM that failed
+  ("Failed to allocate framebuffer left") and left the top screen broken.
 - `main.lua` draws the game to the top screen only and drops bottom-screen
   touches. `conf.lua` sets up the 400×240 window.
 - `Platform` and `Performance` recognize the 3DS. ROM import uses the

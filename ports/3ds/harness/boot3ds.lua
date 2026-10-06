@@ -202,6 +202,16 @@ local okC, errC = xpcall(function()
   check("TrueType fonts fall back to the system font (no CFNT crash)", okTtf and okPath)
   local okPng = pcall(love.graphics.newImage, "assets/logo/logo.png")
   check("PNG paths load as PNG, not rewritten to .t3x", okPng)
+  check("framebuffers never rebuilt after boot (no real window.setMode)",
+    (Mock.setModeCalls or 0) == 0, Mock.setModeCalls)
+  do
+    local Renderer = require("src.render.Renderer")
+    local okR, r = pcall(function() Renderer:init(); return Renderer:frameRects() end)
+    check("game picture is centred at 1x on the 400x240 top screen",
+      okR and r.ox == 120 and r.oy == 48 and r.vpw == 160 and r.vph == 144,
+      okR and ("ox=%s oy=%s %sx%s"):format(tostring(r.ox), tostring(r.oy),
+        tostring(r.vpw), tostring(r.vph)) or r)
+  end
   check("no 3D meshes were created", (Mock.meshes or 0) == 0, Mock.meshes)
   local Tilt = require("src.render.Tilt")
   Tilt.applyOptions({ tilt = 3 }); Tilt.setLevel(2)
