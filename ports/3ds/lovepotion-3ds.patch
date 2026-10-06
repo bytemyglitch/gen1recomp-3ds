@@ -1,4 +1,4 @@
-From 5fc38c0821f9e72c84835040223c401f35071257 Mon Sep 17 00:00:00 2001
+From a3828b5a3d42af1273d9ed47c69daf3e8fffe211 Mon Sep 17 00:00:00 2001
 From: Aaron Morgan <morganaaron.mail@icloud.com>
 Date: Mon, 5 Oct 2026 15:55:33 -0500
 Subject: [PATCH] 3DS: implement queueable sources, decode PNG, fix static
@@ -21,8 +21,9 @@ Claude-Session: https://claude.ai/code/session_01YUDdWjWFXzUKoBPqr1pYpC
  .../source/objects/truetyperasterizer_ext.cpp |  78 +++++++-
  source/modules/audio/wrap_audio.cpp           |  29 ++-
  source/modules/filesystem/wrap_filesystem.cpp |  10 +-
+ source/objects/imagedata/imagedata.cpp        |  75 +++++++-
  source/objects/thread/luathread.cpp           |   5 +
- 8 files changed, 295 insertions(+), 26 deletions(-)
+ 9 files changed, 368 insertions(+), 28 deletions(-)
 
 diff --git a/include/objects/imagedata/imagedata.tcc b/include/objects/imagedata/imagedata.tcc
 index dce31cf..2cfa70f 100644
@@ -538,6 +539,112 @@ index 9c9efec..6691302 100644
  
          file = instance()->OpenFile(filename.c_str(), File::MODE_CLOSED);
      }
+diff --git a/source/objects/imagedata/imagedata.cpp b/source/objects/imagedata/imagedata.cpp
+index cf3e99c..7ed4473 100644
+--- a/source/objects/imagedata/imagedata.cpp
++++ b/source/objects/imagedata/imagedata.cpp
+@@ -1,10 +1,70 @@
+ #include <objects/imagedata/imagedata.tcc>
+ 
++#include <common/color.hpp>
++#include <common/math.hpp>
++
++#include <cstring>
++
+ #include <modules/filesystem/physfs/filesystem.hpp>
+ #include <modules/image/imagemodule.hpp>
+ 
+ using namespace love;
+ 
++/*
++** On 3DS an ImageData holds pixels the way the GPU samples them: padded to a
++** power-of-two width and height, laid out in 8x8 Morton-order tiles, each
++** RGBA8 pixel packed as R<<24 | G<<16 | B<<8 | A (bytes A,B,G,R in memory).
++** setPixel/getPixel/paste and Texture creation all assume that, but decoders
++** hand back plain row-major R,G,B,A and encoders expect the same, so the
++** two conversions below run at those boundaries.  (Before PNG decoding was
++** enabled on 3DS only pre-tiled .t3x files were ever decoded, so nothing
++** exercised this.)
++*/
++static std::unique_ptr<uint8_t[]> linearToTiledRGBA8(const uint8_t* linear, int width,
++                                                     int height, size_t& outSize)
++{
++    outSize        = love::GetPixelFormatSliceSize(PIXELFORMAT_RGBA8_UNORM, width, height);
++    auto tiled     = std::make_unique<uint8_t[]>(outSize);
++    const auto pow = NextPo2(width);
++
++    std::memset(tiled.get(), 0, outSize);
++
++    for (int y = 0; y < height; y++)
++    {
++        for (int x = 0; x < width; x++)
++        {
++            const uint8_t* src = linear + ((size_t)y * width + x) * 4;
++            auto* dst          = Color::FromTile<uint32_t>(tiled.get(), pow, { (float)x, (float)y });
++
++            *dst = ((uint32_t)src[0] << 24) | ((uint32_t)src[1] << 16) |
++                   ((uint32_t)src[2] << 8) | (uint32_t)src[3];
++        }
++    }
++
++    return tiled;
++}
++
++static void tiledToLinearRGBA8(const uint8_t* tiled, int width, int height, uint8_t* linear)
++{
++    const auto pow = NextPo2(width);
++
++    for (int y = 0; y < height; y++)
++    {
++        for (int x = 0; x < width; x++)
++        {
++            const uint32_t packed =
++                *Color::FromTile<uint32_t>(tiled, pow, { (float)x, (float)y });
++            uint8_t* dst = linear + ((size_t)y * width + x) * 4;
++
++            dst[0] = (packed >> 24) & 0xFF;
++            dst[1] = (packed >> 16) & 0xFF;
++            dst[2] = (packed >> 8) & 0xFF;
++            dst[3] = packed & 0xFF;
++        }
++    }
++}
++
++
+ template<>
+ void ImageData<Console::ALL>::Decode(Data* data)
+ {
+@@ -53,9 +113,16 @@ void ImageData<Console::ALL>::Decode(Data* data)
+ 
+     this->width  = image.width;
+     this->height = image.height;
+-    this->data   = std::move(image.data);
+     this->format = image.format;
+ 
++    if (Console::Is(Console::CTR) && image.format == PIXELFORMAT_RGBA8_UNORM)
++    {
++        size_t tiledSize = 0;
++        this->data = linearToTiledRGBA8(image.data.get(), image.width, image.height, tiledSize);
++    }
++    else
++        this->data = std::move(image.data);
++
+     this->decoder = decoder;
+ 
+     this->pixelSetFunction = GetPixelSetFunction(this->format);
+@@ -75,7 +142,11 @@ FileData* ImageData<Console::ALL>::Encode(FormatHandler::EncodedFormat encodedFo
+     rawImage.size   = this->GetSize();
+ 
+     rawImage.data = std::make_unique<uint8_t[]>(rawImage.size);
+-    std::memcpy(rawImage.data.get(), this->data.get(), rawImage.size);
++
++    if (Console::Is(Console::CTR) && this->format == PIXELFORMAT_RGBA8_UNORM)
++        tiledToLinearRGBA8(this->data.get(), width, height, rawImage.data.get());
++    else
++        std::memcpy(rawImage.data.get(), this->data.get(), rawImage.size);
+ 
+     rawImage.format = this->format;
+ 
 diff --git a/source/objects/thread/luathread.cpp b/source/objects/thread/luathread.cpp
 index d229e36..ac573cd 100644
 --- a/source/objects/thread/luathread.cpp

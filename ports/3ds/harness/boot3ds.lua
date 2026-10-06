@@ -206,6 +206,11 @@ local okC, errC = xpcall(function()
   local Tilt = require("src.render.Tilt")
   Tilt.applyOptions({ tilt = 3 }); Tilt.setLevel(2)
   check("TILT 3D view cannot switch on", not Tilt.active())
+  local CacheContract = require("src.import.CacheContract")
+  check("caches imported before the ImageData fix are re-imported",
+    CacheContract.formatFor("red"):sub(-11) == "3ds-tiled1:"
+    and not CacheContract.markerMatches("red", "rom-cache-v12-gen1:"
+      .. require("src.core.GameVersion").info("red").sha1))
   check("launcher lists Gen 1 only", #require("src.core.GameVersion").ORDER == 3)
   check("boot never loads the Emerald symbol tables",
     package.loaded["src.import.gba.syms.emerald"] == nil

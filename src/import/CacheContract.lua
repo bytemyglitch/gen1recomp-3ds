@@ -835,8 +835,17 @@ function CacheContract.optionalSemanticModules(version)
   return copy(OPTIONAL_SEMANTIC_MODULES[GameVersion.generation(version)])
 end
 
+-- Nintendo 3DS caches carry their own generation.  Builds before the
+-- LÖVE Potion ImageData fix encoded every generated PNG from the 3DS's tiled
+-- texture layout as if it were plain rows, so a cache imported on the console
+-- before then is scrambled; the suffix makes the launcher ask for one
+-- re-import instead of loading it.  Bump it if 3DS-written caches change again.
+CacheContract.CONSOLE_FORMAT_SUFFIX =
+  (type(love) == "table" and love._console == "3DS") and "3ds-tiled1:" or ""
+
 function CacheContract.formatFor(version)
-  return CacheContract.VERSION_FORMAT[version] or CacheContract.FORMAT
+  return (CacheContract.VERSION_FORMAT[version] or CacheContract.FORMAT)
+    .. CacheContract.CONSOLE_FORMAT_SUFFIX
 end
 
 function CacheContract.markerFor(version, sha1)

@@ -69,6 +69,11 @@ LÖVE Potion (`lovepotion-3ds.patch`):
   handful of text sizes the allocation failed and the console crashed
   (Luma3DS data abort in `memcpy`). Fonts built from the same data now share
   one copy, and non-CFNT data raises a Lua error instead of crashing.
+- PNGs were handed to the 3DS GPU as plain rows, but on 3DS an `ImageData`
+  must be tiled, padded to power-of-two sizes, with bytes in A,B,G,R order.
+  Every decoded image came out scrambled, and every PNG the ROM importer
+  wrote was scrambled on disk. Decoding and encoding now convert at the
+  boundary; caches imported before this fix are flagged for one re-import.
 - Worker threads never got the `bit` library (only the main Lua state
   did), so the music synthesizer thread failed at `require("bit")`.
 
