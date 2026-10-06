@@ -13,6 +13,11 @@ local Zoom = require("src.render.Zoom")
 
 local Tilt = {}
 
+-- Nintendo 3DS: the perspective ground plane needs a shader and a dynamic
+-- mesh, neither of which LÖVE Potion has there.  Tilt stays at OFF whatever
+-- an options file (say, one copied from a PC) asks for.
+local DISABLED = type(love) == "table" and love._console == "3DS"
+
 -- Discrete tilt angles in degrees (index 0 is off).  Cycle: off→15→35→50→off.
 Tilt.ANGLES_DEG = { 0, 15, 35, 50 }
 Tilt.ANGLE_LABELS = { "OFF", "15", "35", "50" }
@@ -42,7 +47,7 @@ local function goalFor(level)
 end
 
 function Tilt.setLevel(level)
-  level = math.floor(tonumber(level) or 0)
+  level = DISABLED and 0 or math.floor(tonumber(level) or 0)
   if level < 0 then level = 0 end
   if level > 3 then level = 3 end
   local goal = goalFor(level)
@@ -78,7 +83,7 @@ function Tilt.reset()
 end
 
 function Tilt.applyOptions(opts)
-  local level = math.floor(tonumber(opts and opts.tilt) or 0)
+  local level = DISABLED and 0 or math.floor(tonumber(opts and opts.tilt) or 0)
   if level < 0 then level = 0 end
   if level > 3 then level = 3 end
   Tilt.level = level
@@ -110,6 +115,7 @@ end
 -- true while tilt is on *or* still tweening -- i.e. whenever the renderer
 -- must take the perspective path rather than the flat blit
 function Tilt.active()
+  if DISABLED then return false end
   return Tilt.level > 0 or Tilt.angle > 0
 end
 

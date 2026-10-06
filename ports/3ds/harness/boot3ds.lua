@@ -14,6 +14,7 @@ local unpatched = false
 for i = 4, #arg do
   if arg[i] == "--unpatched" then unpatched = true end
   if arg[i] == "--stock-paths" then Mock.stockPaths = true end
+  if arg[i] == "--ready" then READY = true end
 end
 
 os.execute("mkdir -p '" .. saveRoot .. "'")
@@ -71,6 +72,17 @@ report("conf: identity=%s window=%sx%s modules.mouse=%s",
   tostring(c.identity), tostring(c.window.width), tostring(c.window.height),
   tostring(c.modules.mouse))
 
+-- --ready: Red counts as imported, so the launcher shows its cartridge and
+-- play path (the ROM-derived cache itself is still absent).
+if READY then
+  local RomImporter = require("src.import.RomImporter")
+  local realIsReady = RomImporter.isReady
+  RomImporter.isReady = function(version, ...)
+    if version == "red" then return true end
+    return realIsReady(version, ...)
+  end
+end
+
 ok, err = xpcall(function()
   local mainChunk = assert(loadfile(gameDir .. "/main.lua"))
   mainChunk()
@@ -92,7 +104,10 @@ end
 local t = 180
 for _, b in ipairs({ "dpdown", "dpdown", "dpup", "dpright", "dpleft", "rightshoulder",
                      "leftshoulder", "dpdown", "a", "b", "dpup", "a", "b", "start", "b" }) do
-  tap(t, b); t = t + 20
+  -- with --ready, A/START on the cartridge would boot a game whose cache the
+  -- harness does not have; navigate only
+  if not (READY and (b == "a" or b == "start")) then tap(t, b) end
+  t = t + 20
 end
 at(200, function() Mock.touch(160, 120) end)
 at(400, function() Mock.touch(10, 10) end)
@@ -187,6 +202,10 @@ local okC, errC = xpcall(function()
   check("TrueType fonts fall back to the system font (no CFNT crash)", okTtf and okPath)
   local okPng = pcall(love.graphics.newImage, "assets/logo/logo.png")
   check("PNG paths load as PNG, not rewritten to .t3x", okPng)
+  check("no 3D meshes were created", (Mock.meshes or 0) == 0, Mock.meshes)
+  local Tilt = require("src.render.Tilt")
+  Tilt.applyOptions({ tilt = 3 }); Tilt.setLevel(2)
+  check("TILT 3D view cannot switch on", not Tilt.active())
   check("launcher lists Gen 1 only", #require("src.core.GameVersion").ORDER == 3)
   check("boot never loads the Emerald symbol tables",
     package.loaded["src.import.gba.syms.emerald"] == nil

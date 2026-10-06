@@ -21,8 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run the 3DS boot harness
+      - name: Run the 3DS boot harness (fresh install)
         run: ports/3ds/harness/run.sh 600
+      - name: Run the 3DS boot harness (Red imported, cartridge showing)
+        run: ports/3ds/harness/run.sh 900 --ready
 
   bytecode:
     name: Precompile Lua for the 3DS

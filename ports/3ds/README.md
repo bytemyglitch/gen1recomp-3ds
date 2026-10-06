@@ -47,6 +47,8 @@ The bottom screen stays black, and touches on it are ignored.
 - **Performance tier is locked to LOW**, so music is synthesized at 22,050 Hz.
 - **No self-updater or online mod catalog.** Link play has not been tried on a console.
 - **No launcher video or splash animation.**
+- **No 3D.** The launcher's cartridge is drawn flat and front-on instead of
+  as a spinning 3D model, and the in-game TILT view stays off.
 - The picture is the Game Boy's 160×144 at 1× on the 400×240 top screen.
 
 ## What changed, and why

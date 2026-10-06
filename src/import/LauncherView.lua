@@ -957,6 +957,63 @@ local function drawGbaMolding(project, w, h, z, shell, side)
   end
 end
 
+-- Nintendo 3DS: a flat, front-on cartridge.  The desktop cartridge is a
+-- software-3D model (perspective-projected faces and side walls, a label
+-- mesh bent to the projected face, a hover shader); LÖVE Potion has no
+-- Mesh:setVertices and no shaders, and the projection math costs frames the
+-- console does not have.  Same outline, colours and label art, drawn 2D.
+local FLAT_CARTRIDGES = type(love) == "table" and love._console == "3DS"
+
+local function flatCartridge(imp, x, y, w, h, skin, focused, active)
+  local cx, cy = x + w / 2, y + h / 2
+  local scale = active and 0.965 or ((focused and 1.04) or 1)
+  local function flat(outline)
+    local points = {}
+    for i, p in ipairs(outline) do
+      points[i] = { cx + p[1] * w * scale, cy + p[2] * h * scale }
+    end
+    return points
+  end
+  local main, cap = CartShape.outlines(skin.shape)
+  local mainFace, capFace = flat(main), flat(cap)
+  local shell = skin.color
+  local side = { math.floor(shell[1] * 0.54), math.floor(shell[2] * 0.54),
+    math.floor(shell[3] * 0.54) }
+
+  love.graphics.push("all")
+  if focused and love.graphics.polygon then
+    local function ring(points)
+      local line = {}
+      for i = 1, #points do
+        line[#line + 1], line[#line + 2] = points[i][1], points[i][2]
+      end
+      return line
+    end
+    Theme.col(PAL.lineStrong, 1)
+    love.graphics.setLineWidth(math.max(2, math.min(w, h) * 0.02))
+    love.graphics.polygon("line", ring(mainFace))
+    love.graphics.polygon("line", ring(capFace))
+  end
+  cartPolygon(mainFace, shell, 1)
+  cartPolygon(capFace, shell, 1)
+
+  local rect = CartShape.labelRect(skin.shape)
+  local labelX = cx + (rect[1] * w) * scale
+  local labelY = cy + (rect[2] * h) * scale
+  local labelW, labelH = rect[3] * w * scale, rect[4] * h * scale
+  Theme.col(side, 0.95)
+  love.graphics.rectangle("fill", labelX - 2, labelY - 2, labelW + 4, labelH + 4)
+  local label = cartridgeLabel(imp, skin.cacheKey, skin.labelPath, skin.cartId)
+  if label then
+    local artScale = math.min(labelW / label.width, labelH / label.height)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(label.image,
+      labelX + (labelW - label.width * artScale) / 2,
+      labelY + (labelH - label.height * artScale) / 2, 0, artScale, artScale)
+  end
+  love.graphics.pop()
+end
+
 local function cartridgeButton(imp, x, y, w, h, key, skin, action, version)
   local state = cartridgeState(imp, skin.cacheKey)
   markNoDrag(imp, x, y, w, h)
@@ -999,6 +1056,15 @@ local function cartridgeButton(imp, x, y, w, h, key, skin, action, version)
       state.active, active = nil, false
       state.dragged = nil
     end
+  end
+
+  if FLAT_CARTRIDGES then
+    Kit._audit("control", x, y, w, h, key)
+    flatCartridge(imp, x, y, w, h, skin, focused or hot, active)
+    if not state.active and (Kit._activateId == key) then
+      queueAction(imp, key, action)
+    end
+    return
   end
 
   local dt = math.min(0.08, math.max(0, Kit.time - (state.lastTime or Kit.time)))

@@ -761,7 +761,7 @@ function Mock.install(opts)
     newTextBatch = function(font)
       return newObject("textbatch", {}, { font = font })
     end,
-    newMesh = function() return newObject("mesh", {}, {}) end,
+    newMesh = function() Mock.meshes = (Mock.meshes or 0) + 1 return newObject("mesh", {}, {}) end,
     getMeshCullMode = function() return "none" end, setMeshCullMode = function() end,
     getFrontFaceWinding = function() return "ccw" end, setFrontFaceWinding = function() end,
     getBlendState = function() return {} end, setBlendState = function() end,

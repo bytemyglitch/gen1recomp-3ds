@@ -18,6 +18,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 WORK="$ROOT/.bazinga/3ds-harness"
 FRAMES="${1:-600}"
+shift || true   # anything after the frame count goes to boot3ds.lua (e.g. --ready)
 LOVEPOTION_REF="906511d"
 
 mkdir -p "$WORK"
@@ -38,4 +39,4 @@ fi
 SAVE="$WORK/save"
 rm -rf "$SAVE"
 cd "$HERE"
-exec "$WORK/hlua" boot3ds.lua "$ROOT" "$SAVE" "$FRAMES"
+exec "$WORK/hlua" boot3ds.lua "$ROOT" "$SAVE" "$FRAMES" "$@"
