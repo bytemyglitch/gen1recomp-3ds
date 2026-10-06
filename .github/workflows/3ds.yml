@@ -34,14 +34,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Tools for packing
-        run: apt-get update -qq && apt-get install -y -qq zip unzip git
+        run: apt-get update -qq && apt-get install -y -qq zip unzip git python3
       - name: Build patched LÖVE Potion and fuse the game
         run: |
           git config --global --add safe.directory '*'
           ports/3ds/build.sh
+      - name: Decode crash dumps from ports/3ds/crashdumps
+        if: hashFiles('ports/3ds/crashdumps/*.dmp') != ''
+        run: |
+          elf="$(find .bazinga/3ds/lovepotion/build -name '*.elf' -print -quit)"
+          cp "$elf" dist/3ds/lovepotion-patched.elf
+          for dmp in ports/3ds/crashdumps/*.dmp; do
+            out="$(python3 ports/3ds/symbolize.py "$dmp" "$elf" \
+              --addr2line "$DEVKITARM/bin/arm-none-eabi-addr2line" \
+              --objdump "$DEVKITARM/bin/arm-none-eabi-objdump" 2>&1)"
+            printf '### %s\n```\n%s\n```\n' "$dmp" "$out" >> "$GITHUB_STEP_SUMMARY"
+            enc="$(printf '%s' "$out" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+            echo "::warning title=Crash dump $(basename "$dmp")::$enc"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: gen1recomp-3ds
           path: |
             dist/3ds/gen1recomp.3dsx
             dist/3ds/lovepotion-patched.3dsx
+            dist/3ds/lovepotion-patched.elf
