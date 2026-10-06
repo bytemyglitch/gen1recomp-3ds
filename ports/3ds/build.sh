@@ -92,8 +92,15 @@ if [ -n "$BYTECODE" ]; then
   if console_lua_is_double; then
     say "replacing Lua sources in game.love with precompiled bytecode"
     (cd "$BYTECODE" && zip -q -r "$WORK/game.love" .)
+    chunks=$(find "$BYTECODE" -name '*.lua' | wc -l)
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+      echo "::notice title=Lua bytecode::$chunks precompiled chunks shipped (3DS luaconf.h: LUA_NUMBER double)"
+    fi
   else
     say "WARNING: could not confirm the 3DS Lua uses double numbers; shipping Lua source"
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+      echo "::warning title=Lua bytecode::not shipped - 3DS luaconf.h missing or LUA_NUMBER is not double"
+    fi
   fi
 fi
 
