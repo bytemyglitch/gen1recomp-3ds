@@ -135,8 +135,19 @@ Kit.font = font
 -- for the latter only.
 local UI_SCALE = 1.3
 
+-- Nintendo 3DS: a 400x240 screen, a third of the Switch's 1280x720 in each
+-- direction.  The 0.9 floor (a phone's tap targets) would lay the launcher
+-- out ~800px tall there; a fixed smaller scale gives the two-column layout
+-- the Switch uses instead, sized for the system font at arm's length.
+Kit.CONSOLE_SCALE = (type(love) == "table" and love._console == "3DS")
+  and (tonumber(os.getenv and os.getenv("POKEPORT_3DS_SCALE")) or 0.55) or nil
+
+-- Console builds steer the focus ring by geometry alone (see _resolveNav).
+Kit.SPATIAL_NAV = Kit.CONSOLE_SCALE ~= nil
+
 function Kit.layout(width, height)
-  local s = Theme.clamp(math.min(width / 640, height / 768), 0.9, 1.6) * UI_SCALE
+  local s = Kit.CONSOLE_SCALE
+    or Theme.clamp(math.min(width / 640, height / 768), 0.9, 1.6) * UI_SCALE
   -- Two numbers, not a formatted key: this runs once per frame and the
   -- string:format allocated on every one of them.
   local kw, kh = math.floor(width), math.floor(height)
@@ -483,6 +494,50 @@ function Kit._resolveNav()
           if not bestScore or score < bestScore then
             best, bestScore = c, score
           end
+        end
+      end
+    end
+    if best then Kit.focusId = best.id end
+    return
+  end
+
+  if Kit.SPATIAL_NAV then
+    -- Plain spatial navigation: the nearest control in the pressed direction.
+    -- The layer model below keys its bands off fixed pixel heights that
+    -- assume a desktop-sized window; on the 3DS's 400x240 screen they put
+    -- everything under the header in one band, so Down jumped from the
+    -- cartridge straight to the (off-screen) footer and the save buttons
+    -- between were unreachable.
+    -- A candidate counts as "in that direction" once its centre is past the
+    -- current control's far edge (less a quarter of the smaller size, so a
+    -- slightly overlapping neighbour still qualifies); a wide button below
+    -- the cartridge is not "to its right" just because it sticks out further.
+    local vertical = dir == "down" or dir == "up"
+    local sign = (dir == "down" or dir == "right") and 1 or -1
+    local best, bestScore
+    for i = 1, n do
+      local c = Kit._nav[i]
+      if c.id ~= cur.id then
+        local cMain = vertical and (c.y + c.h / 2) or (c.x + c.w / 2)
+        local curLo = vertical and cur.y or cur.x
+        local curHi = vertical and (cur.y + cur.h) or (cur.x + cur.w)
+        local cLo = vertical and c.y or c.x
+        local cHi = vertical and (c.y + c.h) or (c.x + c.w)
+        local tol = math.min(curHi - curLo, cHi - cLo) / 4
+        local past
+        if sign > 0 then past = cMain > curHi - tol else past = cMain < curLo + tol end
+        if past then
+          local fwd = sign > 0 and (cLo - curHi) or (curLo - cHi)
+          local gap, off
+          if vertical then
+            gap = math.max(0, c.x - (cur.x + cur.w), cur.x - (c.x + c.w))
+            off = math.abs((c.x + c.w / 2) - cx)
+          else
+            gap = math.max(0, c.y - (cur.y + cur.h), cur.y - (c.y + c.h))
+            off = math.abs((c.y + c.h / 2) - cy)
+          end
+          local score = math.max(0, fwd) + gap * 4 + off * 0.25
+          if not bestScore or score < bestScore then best, bestScore = c, score end
         end
       end
     end

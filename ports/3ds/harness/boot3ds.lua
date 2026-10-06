@@ -15,10 +15,21 @@ for i = 4, #arg do
   if arg[i] == "--unpatched" then unpatched = true end
   if arg[i] == "--stock-paths" then Mock.stockPaths = true end
   if arg[i] == "--ready" then READY = true end
+  -- --shots DIR --at 120,300 --keys 180:dpdown,200:a
+  if arg[i] == "--shots" then SHOTS = arg[i + 1] end
+  if arg[i] == "--at" then SHOT_AT = arg[i + 1] end
+  if arg[i] == "--keys" then KEYS = arg[i + 1] end
 end
+local Rec
+
 
 os.execute("mkdir -p '" .. saveRoot .. "'")
 Mock.install({ source = gameDir, saveRoot = saveRoot, unpatchedPotion = unpatched })
+if SHOTS then
+  Rec = dofile(HERE .. "/drawrec.lua")
+  Rec.install()
+  os.execute("mkdir -p '" .. SHOTS .. "'")
+end
 
 package.path = gameDir .. "/?.lua;" .. gameDir .. "/?/init.lua;" .. package.path
 
@@ -102,15 +113,23 @@ local function tap(frame, button)
   at(frame + 6, function() Mock.release(button) end)
 end
 local t = 180
-for _, b in ipairs({ "dpdown", "dpdown", "dpup", "dpright", "dpleft", "rightshoulder",
+if KEYS then
+  for spec in KEYS:gmatch("[^,]+") do
+    local f, b = spec:match("^(%d+):(%w+)$")
+    tap(tonumber(f), b)
+  end
+end
+for _, b in ipairs(KEYS and {} or { "dpdown", "dpdown", "dpup", "dpright", "dpleft", "rightshoulder",
                      "leftshoulder", "dpdown", "a", "b", "dpup", "a", "b", "start", "b" }) do
   -- with --ready, A/START on the cartridge would boot a game whose cache the
   -- harness does not have; navigate only
   if not (READY and (b == "a" or b == "start")) then tap(t, b) end
   t = t + 20
 end
-at(200, function() Mock.touch(160, 120) end)
-at(400, function() Mock.touch(10, 10) end)
+if not KEYS then
+  at(200, function() Mock.touch(160, 120) end)
+  at(400, function() Mock.touch(10, 10) end)
+end
 
 local touchSeen = 0
 local realTouch = love.touchpressed
@@ -134,6 +153,13 @@ ok, err = xpcall(function()
       if v > (before[k] or 0) then screensDrawn[k] = (screensDrawn[k] or 0) + 1 end
     end
     if #Mock.gstate.stack > maxDepth then maxDepth = #Mock.gstate.stack end
+    if SHOTS and SHOT_AT then
+      for want in SHOT_AT:gmatch("%d+") do
+        if tonumber(want) == frame then
+          Rec.dump(("%s/frame%04d.json"):format(SHOTS, frame), { frame = frame })
+        end
+      end
+    end
     if quit ~= nil then report("game asked to quit at frame %d (%s)", frame, tostring(quit)); break end
   end
 end, traceback)

@@ -58,6 +58,11 @@ local SKIN_FORMAT_LABEL = {
 }
 local MIN_FIND_ROWS = 3
 local PANEL_OVERSCAN = 0.75
+-- Nintendo 3DS: 400x240 top screen plus a 320x240 bottom screen.  The
+-- launcher packs its controls onto the top screen (one header row, the
+-- footer reduced to its buttons) and the wordmark, version and trust notice
+-- move to the bottom screen -- see drawBottomScreen.
+local CONSOLE_3DS = type(love) == "table" and love._console == "3DS"
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 
@@ -962,7 +967,7 @@ end
 -- mesh bent to the projected face, a hover shader); LÖVE Potion has no
 -- Mesh:setVertices and no shaders, and the projection math costs frames the
 -- console does not have.  Same outline, colours and label art, drawn 2D.
-local FLAT_CARTRIDGES = type(love) == "table" and love._console == "3DS"
+local FLAT_CARTRIDGES = CONSOLE_3DS
 
 local function flatCartridge(imp, x, y, w, h, skin, focused, active)
   local cx, cy = x + w / 2, y + h / 2
@@ -1012,6 +1017,21 @@ local function flatCartridge(imp, x, y, w, h, skin, focused, active)
       labelY + (labelH - label.height * artScale) / 2, 0, artScale, artScale)
   end
   love.graphics.pop()
+  -- The controller ring: the same white rounded ring the buttons get, around
+  -- the cartridge's box -- the shell-outline glow alone read as a smudge on
+  -- the 3DS screen.
+  if focused then
+    local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+    for _, face in ipairs({ mainFace, capFace }) do
+      for _, pt in ipairs(face) do
+        x0, y0 = math.min(x0, pt[1]), math.min(y0, pt[2])
+        x1, y1 = math.max(x1, pt[1]), math.max(y1, pt[2])
+      end
+    end
+    local o = 5
+    Theme.strokeRounded(x0 - o, y0 - o, x1 - x0 + 2 * o, y1 - y0 + 2 * o,
+      PAL.ink, 1, 2, 6)
+  end
 end
 
 local function cartridgeButton(imp, x, y, w, h, key, skin, action, version)
@@ -1608,8 +1628,10 @@ local function headerTabMetrics(m)
   end
   local dropW = width + math.floor(24 * m.s)
   local used, rows = dropW, 1
+  local avail = m.contentW
+  if CONSOLE_3DS then avail = avail - (3 * m.chip + 3 * gap) end
   for _ = 1, #HEADER_TABS do
-    if used + gap + width > m.contentW then rows, used = rows + 1, width
+    if used + gap + width > avail then rows, used = rows + 1, width
     else used = used + gap + width end
   end
   local labelH = Kit.textHeight("micro") + math.floor(5 * m.s)
@@ -1699,8 +1721,9 @@ local function buildHeader(imp, m)
   Theme.versionRail(m.x, y, m.w, m.railH, railColors)
   y = y + m.railH
 
-  -- logo row
-  local rowH = m.logoH + math.floor(12 * m.s)
+  -- logo row (3DS: none -- the cluster shares the tab row and the wordmark
+  -- is on the bottom screen)
+  local rowH = CONSOLE_3DS and 0 or (m.logoH + math.floor(12 * m.s))
   local gear = m.chip
 
   -- The wordmark is centred in the row MINUS the right cluster, mirrored on
@@ -1717,7 +1740,7 @@ local function buildHeader(imp, m)
   local boxX = mobile and (m.x + m.pad) or (m.x + clusterW)
   local boxW = mobile and math.max(0, m.w - clusterW - m.pad)
     or math.max(0, m.w - 2 * clusterW)
-  if imp.logo and boxW > 0 then
+  if imp.logo and boxW > 0 and not CONSOLE_3DS then
     local lw, lh = imp.logo:getDimensions()
     local maxW = math.min(320 * m.s, boxW)
     local scale = math.min(maxW / lw, m.logoH / lh)
@@ -1736,20 +1759,23 @@ local function buildHeader(imp, m)
   end
 
   local rx = m.x + m.w - m.pad
-  local by = y + (rowH - gear) / 2
+  local by = CONSOLE_3DS and (y + math.floor(6 * m.s)) or (y + (rowH - gear) / 2)
 
   -- Switch-only: show the running app version opposite the settings gear so
   -- players can confirm which build is on the microSD (OTA / zip updates).
   if imp.isNX then
+    -- (3DS: the version is on the bottom screen, the header has no room)
     local label = "v" .. tostring(Version.engine or "?")
     local tw = Kit.textWidth("small", label)
     local padX = math.floor(12 * m.s)
     local chipW = math.max(tw + 2 * padX, gear)
     local lx = m.x + m.pad
-    Kit.card(lx, by, chipW, gear, "badge")
     local th = Kit.textHeight("small")
-    Kit.text("small", label, lx + math.floor((chipW - tw) / 2),
-      by + math.floor((gear - th) / 2), PAL.yellow)
+    if not CONSOLE_3DS then
+      Kit.card(lx, by, chipW, gear, "badge")
+      Kit.text("small", label, lx + math.floor((chipW - tw) / 2),
+        by + math.floor((gear - th) / 2), PAL.yellow)
+    end
   end
 
   -- The right cluster is laid out right to left -- Quit outermost, the gear
@@ -1777,6 +1803,7 @@ local function buildHeader(imp, m)
   end
 
   if quitX then btn(imp, quitX, by, gear, gear, "quit", "", chrome.quit) end
+  local clusterLeft = rx
 
   -- The self-update control lives in the FOOTER next to the BCG mark (small,
   -- out of the wordmark's way -- it used to overlap the logo on a phone).  It
@@ -1789,7 +1816,8 @@ local function buildHeader(imp, m)
   local tx = m.x + m.pad
   local ty = y + math.floor(6 * m.s)
   local tabLeft = tx
-  local tabRight = m.x + m.w - m.pad
+  local tabRight = CONSOLE_3DS and (clusterLeft - math.floor(6 * m.s))
+    or (m.x + m.w - m.pad)
   local tabGap = math.floor(6 * m.s)
   local tabRowGap = math.floor(4 * m.s)
 
@@ -3776,6 +3804,8 @@ local function footerHeight(imp, m)
   local f = footerLayout(imp, m, math.floor(130 * m.s))
   local h = math.floor(8 * m.s) + f.rowH + math.floor(6 * m.s)
   if f.wrap then h = h + f.chipH + math.floor(6 * m.s) end
+  -- 3DS: the trust message is on the bottom screen, in full, all the time.
+  if CONSOLE_3DS then return h end
   return h + Kit.wrapHeight("micro", TRUST_WARNING, m.contentW)
     + math.floor(8 * m.s)
 end
@@ -3852,6 +3882,7 @@ local function buildFooter(imp, m, y)
   -- the URL inside it IS the link -- no separate link floating elsewhere.
   -- font:getWrap never splits an unspaced word, so the URL stays whole on
   -- one line and a plain substring find locates it.
+  if CONSOLE_3DS then return end
   local lines = Kit.wrapLines("micro", TRUST_WARNING, m.contentW)
   local lh = Kit.textHeight("micro")
   for i, line in ipairs(lines or {}) do
@@ -6825,6 +6856,9 @@ end
 -- with buildHeader (rail, logo row, tab row, hairline).
 local function headerHeight(m)
   local _, _, labelH, rows = headerTabMetrics(m)
+  if CONSOLE_3DS then
+    return m.railH + math.floor(6 * m.s) + m.chip + labelH + math.floor(8 * m.s) + 1
+  end
   return m.railH + m.logoH + math.floor(12 * m.s) + math.floor(6 * m.s)
     + rows * (m.chip + labelH) + (rows - 1) * math.floor(4 * m.s)
     + math.floor(8 * m.s) + 1
@@ -6886,8 +6920,113 @@ local function drawTabLayer(imp, tabId, x, contentY, w, viewH, availH, m, dx)
   imp.tab = prevTab
 end
 
+-- Pad navigation can move the ring onto a control the page or the tab panel
+-- has scrolled out of view (on the 3DS that is most of the footer and the
+-- longer tabs).  When the ring lands somewhere new, scroll just enough to
+-- show it: the tab panel first, then the page.  Applied next frame, like a
+-- wheel notch.
+function LauncherView._followFocus(imp, m, rect)
+  local id = Kit.focusId
+  if not Kit._ringShown or imp._modalUpNow or Transition.active() then
+    imp._followedFocus = id
+    return
+  end
+  if id == nil or id == imp._followedFocus then return end
+  local slot, index
+  for i = 1, Kit._navN or 0 do
+    if Kit._nav[i].id == id then slot, index = Kit._nav[i], i; break end
+  end
+  if not slot then return end
+  imp._followedFocus = id
+  local margin = math.floor(6 * m.s)
+  local top, bottom = slot.y, slot.y + slot.h
+  if index >= (imp._tabNavFirst or 1) and index <= (imp._tabNavLast or 0)
+      and tabScrollMax(imp) > 0 then
+    local at, d = tabScrollAt(imp), 0
+    if bottom > rect.y + rect.h then d = bottom + margin - (rect.y + rect.h) end
+    if top < rect.y then d = top - margin - rect.y end
+    local to = Kit.scrollClamp(at + d, tabScrollMax(imp))
+    setTabScroll(imp, to)
+    top, bottom = top - (to - at), bottom - (to - at)
+  end
+  local maxPage = imp._pageScrollMax or 0
+  if maxPage > 0 then
+    local at, d = imp._pageScroll or 0, 0
+    if bottom > m.top + m.h then d = bottom + margin - (m.top + m.h) end
+    if top < m.top then d = top - margin - m.top end
+    imp._pageScroll = Kit.scrollClamp(at + d, maxPage)
+  end
+end
+
+-- 3DS bottom screen (320x240): the wordmark, the build, the controls and
+-- the trust notice -- everything on the launcher that is read rather than
+-- pressed, so the top screen keeps its height for controls.  Compat3DS
+-- draws the bottom screen before the top one, so this paints the launcher
+-- state of the previous frame; it goes blank once the launcher stops
+-- drawing (a game started).
+local BOTTOM_HELP = {
+  { "D-Pad / Circle Pad", "move" },
+  { "A", "select" },
+  { "B", "back" },
+  { "L / R", "switch tab" },
+  { "START", "play" },
+  { "Y", "pointer mode" },
+}
+
+function LauncherView.drawBottomScreen(imp)
+  local W, H = 320, 240
+  local pad = 10
+  Theme.fill(0, 0, W, H, PAL.bg, 1)
+  local y = 6
+  if imp.logo then
+    local lw, lh = imp.logo:getDimensions()
+    local scale = math.min(200 / lw, 44 / lh)
+    local dw, dh = lw * scale, lh * scale
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(imp.logo, math.floor((W - dw) / 2), y, 0, scale, scale)
+    y = y + dh + 2
+  end
+  Kit.textCenter("micro", "v" .. tostring(Version.engine or "?"), 0, y, W, PAL.yellow)
+  y = y + Kit.textHeight("micro") + 6
+  Theme.fill(pad, y, W - 2 * pad, 1, PAL.line, Theme.A.hairline)
+  y = y + 5
+  local lh = Kit.textHeight("micro")
+  local keyW = 0
+  for _, row in ipairs(BOTTOM_HELP) do
+    keyW = math.max(keyW, Kit.textWidth("micro", row[1]))
+  end
+  local colX = math.floor((W - (keyW + 12 + 90)) / 2)
+  for _, row in ipairs(BOTTOM_HELP) do
+    Kit.text("micro", row[1], colX + keyW - Kit.textWidth("micro", row[1]), y, PAL.text)
+    Kit.text("micro", row[2], colX + keyW + 12, y, PAL.muted)
+    y = y + lh
+  end
+  y = y + 4
+  Theme.fill(pad, y, W - 2 * pad, 1, PAL.line, Theme.A.hairline)
+  y = y + 5
+  local lines = Kit.wrapLines("micro", TRUST_WARNING, W - 2 * pad) or {}
+  for i, line in ipairs(lines) do
+    local tw = Kit.textWidth("micro", line)
+    Kit.text("micro", line, math.floor((W - tw) / 2), y + (i - 1) * lh, PAL.muted)
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
 function LauncherView.draw(imp)
   ensureState(imp)
+  if CONSOLE_3DS then
+    local Compat3DS = require("src.core.Compat3DS")
+    local stamp = love.timer.getTime()
+    imp._bottomStamp = stamp
+    Compat3DS.drawBottom = function()
+      -- still the launcher's frame?  (it stops calling draw when a game runs)
+      if imp._bottomStamp and love.timer.getTime() - imp._bottomStamp < 0.25 then
+        LauncherView.drawBottomScreen(imp)
+      else
+        Compat3DS.drawBottom = nil
+      end
+    end
+  end
   local m = Layout.metrics(1200)
 
   -- The pointer is the pad cursor while it is active, so the ring, hover and
@@ -7014,10 +7153,13 @@ function LauncherView.draw(imp)
     drawTabLayer(imp, tabKeyOf(imp), x, contentY, w, viewH, availH, m,
       dir * (1 - p) * w)
   else
+    local first = (Kit._navN or 0) + 1
     drawTabLayer(imp, tabKeyOf(imp), x, contentY, w, viewH, availH, m, 0)
+    imp._tabNavFirst, imp._tabNavLast = first, Kit._navN or 0
   end
 
   buildFooter(imp, m, footY)
+  if CONSOLE_3DS then LauncherView._followFocus(imp, m, rect) end
   Kit.blockClicks = Transition.active()
   local held = imp._modalHeld
   if held then imp[held.key] = held.value end

@@ -1529,6 +1529,10 @@ function RomImporter.new(onComplete, opts)
   -- ROMs, saves and mods go into the imports/ inbox in the save directory
   -- and the gamepad cursor drives the launcher.
   local isNX = Platform.isNX() or Platform.is3DS()
+  -- 3DS: menu navigation (focus ring) by default rather than the Switch's
+  -- virtual pointer -- the pointer is a mouse emulation, slow to steer on a
+  -- 400x240 screen; Y still switches to it.
+  local n3ds = Platform.is3DS()
   local romImportMode = Platform.romImportMode()
   local mobileFileBridge = mobileOS == "Android" or mobileOS == "iOS"
   local android = mobileFileBridge
@@ -1542,6 +1546,7 @@ function RomImporter.new(onComplete, opts)
     onEditTouchControls = opts.onEditTouchControls,
     onOpenSkinStudio = opts.onOpenSkinStudio,
     isNX = isNX,
+    n3ds = n3ds,
     romImportMode = romImportMode,
     mobileFileBridge = mobileFileBridge,
     android = android,
@@ -1774,9 +1779,13 @@ function RomImporter.new(onComplete, opts)
   if self.launcher and love.joystick and love.joystick.getJoystickCount
       and love.joystick.getJoystickCount() > 0 then
     local osName = (love.system and love.system.getOS and love.system.getOS()) or ""
-    if osName == "Linux" or self.isNX then
+    if (osName == "Linux" or self.isNX) and not self.n3ds then
       self:_activatePadCursor()
     end
+  end
+  if self.n3ds then
+    local okKit, Kit = pcall(require, "src.ui.kit.Kit")
+    if okKit then Kit._ringShown = true end
   end
 
   if GameVersion.VERSIONS[self.tab] then
@@ -3882,7 +3891,7 @@ function RomImporter:resumeAfterOverlay()
   if not (love.joystick and love.joystick.getJoystickCount) then return end
   if love.joystick.getJoystickCount() <= 0 then return end
   local osName = (love.system and love.system.getOS and love.system.getOS()) or ""
-  if osName == "Linux" or self.isNX then
+  if (osName == "Linux" or self.isNX) and not self.n3ds then
     self:_activatePadCursor()
   end
 end
@@ -3972,8 +3981,8 @@ function RomImporter:_updatePadCursor(dt)
     self._lastMouseX, self._lastMouseY = mx, my
   end
 
-  if not self._padCursorActive and not self.isNX
-      and (Platform.isUWP() or self._padNavChosen) then
+  if not self._padCursorActive and (not self.isNX or self.n3ds)
+      and (Platform.isUWP() or self._padNavChosen or self.n3ds) then
     self:_navigateWithStick(dt, okKit and Kit or nil)
     local scrollY = self._padAxis.righty or 0
     if math.abs(scrollY) > PAD_DEAD and self._flex then
@@ -4170,7 +4179,7 @@ function RomImporter:gamepadpressed(_, button)
     return
   end
 
-  if not self._padCursorActive and not self.isNX then
+  if not self._padCursorActive and (not self.isNX or self.n3ds) then
     if okKit then Kit._ringShown = true end
     if action == "a" then
       if okKit and Kit.focusId then

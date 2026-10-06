@@ -490,8 +490,11 @@ function Theme.fonts(s)
   local okUi, mod = pcall(require, "src.render.UiFont")
   if okUi then UiFont = mod end
   local cache = {}
+  -- Nintendo 3DS: the system font's glyphs are drawn from a ~13px sheet, so
+  -- anything much under 10px is downscaled into mush on the 400x240 screen.
+  local floor = (type(love) == "table" and love._console == "3DS") and 10 or 8
   local function f(px)
-    local n = math.max(8, math.floor(px + 0.5))
+    local n = math.max(floor, math.floor(px + 0.5))
     if not cache[n] then
       local face = G.newFont(n)
       if UiFont and UiFont.attach then
