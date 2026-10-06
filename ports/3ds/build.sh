@@ -52,14 +52,28 @@ build_lovepotion() {
   git -C "$src" apply --whitespace=nowarn "$PATCH"
 
   local cmd="catnip -T 3DS -DLIBRARY_LOADER=linktime -DUSE_CURL_BACKEND=ON"
+  local log="$WORK/lovepotion-build.log"
+  local status=0
   if command -v catnip >/dev/null 2>&1; then
     say "building with local devkitARM"
-    (cd "$src" && $cmd)
+    if ! (cd "$src" && $cmd) 2>&1 | tee "$log"; then status=1; fi
   elif command -v docker >/dev/null 2>&1; then
     say "building in the devkitpro/devkitarm container"
-    docker run --rm -v "$src":/src -w /src devkitpro/devkitarm $cmd
+    if ! docker run --rm -v "$src":/src -w /src devkitpro/devkitarm $cmd 2>&1 | tee "$log"; then
+      status=1
+    fi
   else
     fail "need devkitPro's catnip (https://devkitpro.org/wiki/Getting_Started) or Docker"
+  fi
+  if [ "$status" -ne 0 ]; then
+    # CI: surface the compiler errors as annotations (run logs are not
+    # always reachable, annotations are)
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+      grep -E "error:|undefined reference" "$log" | head -20 | while IFS= read -r line; do
+        echo "::error title=LÖVE Potion build::${line//%/%25}"
+      done
+    fi
+    fail "LÖVE Potion build failed (log: $log)"
   fi
 
   LOVEPOTION_3DSX="$(find "$src/build" -name '*.3dsx' -print -quit)"

@@ -79,6 +79,21 @@ LÖVE Potion (`lovepotion-3ds.patch`):
   It now uses the shared PNG encoder.
 - Worker threads never got the `bit` library (only the main Lua state
   did), so the music synthesizer thread failed at `require("bit")`.
+- Freeing a canvas mid-frame crashed the whole console. Lua's garbage
+  collector can finalize a canvas while the game is drawing, and citro3d
+  deliberately halts (`svcBreak` in `C3D_RenderTargetDelete`) if a render
+  target is deleted inside a frame. That is what happened after the intro.
+  Textures and canvases are now freed once the frame has ended.
+- Switching between drawing to a canvas and drawing to the screen could keep
+  the previous target's projection. A 400×240 canvas has the same viewport
+  rectangle as the top screen, so the cached viewport skipped the update and
+  the game picture was drawn off-centre. The viewport is now reset on every
+  switch.
+- Worker threads ran on the main thread's CPU core at the same priority. The
+  3DS kernel does not time-slice threads of equal priority, so the music
+  thread only ran while the game waited for vblank, and the music cut in and
+  out. On a New 3DS workers now get CPU core 2. Otherwise they run one
+  priority above the game loop; they sleep when idle.
 
 Gen1Recomp:
 

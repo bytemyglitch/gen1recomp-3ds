@@ -1,8 +1,8 @@
-From 24a7abca48da168f819ca42ed140eb0f324738d8 Mon Sep 17 00:00:00 2001
+From 218f0d20ee72c0be11ec6fec88dc3cbed56125d9 Mon Sep 17 00:00:00 2001
 From: Aaron Morgan <morganaaron.mail@icloud.com>
 Date: Mon, 5 Oct 2026 15:55:33 -0500
-Subject: [PATCH] 3DS: implement queueable sources, decode PNG, fix static
- source double free
+Subject: [PATCH] 3DS: queueable sources, PNG, shared CFNT, thread bit, tiled
+ ImageData, safe texture frees, worker scheduling
 
 - love.audio.newQueueableSource was an empty stub and not registered; implement it
   and the ndsp-backed queue (slots, pending submit on play, starvation stop)
@@ -10,22 +10,37 @@ Subject: [PATCH] 3DS: implement queueable sources, decode PNG, fix static
 - register PNGHandler on 3DS so love.graphics.newImage loads .png
 - static sources freed their shared SoundData buffer in the destructor
 - restore setVolume after ndspChnReset on play
+- share one refcounted system-font (CFNT) copy between fonts
+- open the bit library in love.thread workers
+- ImageData decode/encode converts to and from the GPU's tiled RGBA8 layout
+- free textures and render targets after the frame ends: citro3d panics when a
+  render target is deleted mid-frame, which Lua's GC did (console crash)
+- refresh the viewport and projection on every render-target switch: a
+  400x240 canvas matched the cached top-screen rect and kept the screen
+  projection (game picture off-centre)
+- run love.thread workers on core 2 (New 3DS), else one priority above the
+  main thread: equal priorities on one core starved them (audio dropouts)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01YUDdWjWFXzUKoBPqr1pYpC
 ---
  include/objects/imagedata/imagedata.tcc       |   1 +
+ include/utilities/threads/thread.hpp          |  25 +++
  .../ctr/include/objects/imagedata_ext.hpp     |  14 +-
  platform/ctr/include/objects/source_ext.hpp   |  19 ++
+ .../include/utilities/driver/renderer_ext.hpp |  13 ++
  .../ctr/source/modules/imagemodule_ext.cpp    |   2 +
  platform/ctr/source/objects/imagedata_ext.cpp |  13 +-
  platform/ctr/source/objects/source_ext.cpp    | 177 ++++++++++++++++--
+ platform/ctr/source/objects/texture_ext.cpp   |  42 ++++-
  .../source/objects/truetyperasterizer_ext.cpp |  78 +++++++-
+ .../driver/renderer/renderer_ext.cpp          |  10 +
  source/modules/audio/wrap_audio.cpp           |  29 ++-
  source/modules/filesystem/wrap_filesystem.cpp |  10 +-
  source/objects/imagedata/imagedata.cpp        |  75 +++++++-
  source/objects/thread/luathread.cpp           |   5 +
- 11 files changed, 389 insertions(+), 34 deletions(-)
+ source/utilities/threads/thread.cpp           |  95 +++++++++-
+ 16 files changed, 563 insertions(+), 45 deletions(-)
 
 diff --git a/include/objects/imagedata/imagedata.tcc b/include/objects/imagedata/imagedata.tcc
 index dce31cf..2cfa70f 100644
@@ -39,6 +54,50 @@ index dce31cf..2cfa70f 100644
      #include <utilities/formathandler/types/t3xhandler.hpp>
  #else
      #include <utilities/formathandler/types/astchandler.hpp>
+diff --git a/include/utilities/threads/thread.hpp b/include/utilities/threads/thread.hpp
+index c555773..45028ba 100644
+--- a/include/utilities/threads/thread.hpp
++++ b/include/utilities/threads/thread.hpp
+@@ -5,6 +5,14 @@
+ 
+ #include <atomic>
+ 
++#if defined(__3DS__)
++/* libctru's Thread handle; its headers carry C linkage only via <3ds.h> */
++extern "C"
++{
++    struct Thread_tag;
++}
++#endif
++
+ namespace love
+ {
+     class Threadable;
+@@ -31,7 +39,24 @@ namespace love
+         Threadable* threadable;
+         std::atomic<bool> running;
+ 
++#if defined(__3DS__)
++        /*
++        ** A libctru thread rather than std::thread: std::thread lands on the
++        ** main thread's core at the main thread's priority, and the 3DS
++        ** kernel does not time-slice equal priorities -- the worker only ran
++        ** while love.draw waited for vblank, so a game that used the whole
++        ** frame starved it (audio dropouts every few seconds).
++        */
++        Thread_tag* thread = nullptr;
++        bool Joinable() const
++        {
++            return this->thread != nullptr;
++        }
++        void Join();
++        static void Entry(void* data);
++#else
+         love::thread thread;
++#endif
+         love::mutex mutex;
+     };
+ } // namespace love
 diff --git a/platform/ctr/include/objects/imagedata_ext.hpp b/platform/ctr/include/objects/imagedata_ext.hpp
 index 9f7b1da..198f409 100644
 --- a/platform/ctr/include/objects/imagedata_ext.hpp
@@ -115,6 +174,30 @@ index fa575da..7344333 100644
 +        std::deque<size_t> queuePending;
      };
  } // namespace love
+diff --git a/platform/ctr/include/utilities/driver/renderer_ext.hpp b/platform/ctr/include/utilities/driver/renderer_ext.hpp
+index a684c8f..65dc3c6 100644
+--- a/platform/ctr/include/utilities/driver/renderer_ext.hpp
++++ b/platform/ctr/include/utilities/driver/renderer_ext.hpp
+@@ -120,6 +120,19 @@ namespace love
+             this->deferred.emplace_back(std::move(function));
+         }
+ 
++        /* between C3D_FrameBegin and C3D_FrameEnd */
++        bool IsInFrame() const
++        {
++            return this->inFrame;
++        }
++
++        /* a texture is going away: never compare a later one against it */
++        void ForgetTexture(const C3D_Tex* texture)
++        {
++            if (this->currentTexture == texture)
++                this->currentTexture = nullptr;
++        }
++
+         // clang-format off
+         static constexpr BidirectionalMap primitiveModes =
+         {
 diff --git a/platform/ctr/source/modules/imagemodule_ext.cpp b/platform/ctr/source/modules/imagemodule_ext.cpp
 index 2cf59a9..f0dd081 100644
 --- a/platform/ctr/source/modules/imagemodule_ext.cpp
@@ -406,6 +489,61 @@ index 4e4f8c3..37e408c 100644
      ::DSP::Instance().ChannelAddBuffer(this->channel, &waveBuffer);
  
      if (this->sourceType != TYPE_STREAM)
+diff --git a/platform/ctr/source/objects/texture_ext.cpp b/platform/ctr/source/objects/texture_ext.cpp
+index 6d01d84..de49a63 100644
+--- a/platform/ctr/source/objects/texture_ext.cpp
++++ b/platform/ctr/source/objects/texture_ext.cpp
+@@ -120,18 +120,40 @@ bool Texture<Console::CTR>::LoadVolatile()
+ 
+ void Texture<Console::CTR>::UnloadVolatile()
+ {
+-    if (this->IsRenderTarget() && this->framebuffer != nullptr)
+-    {
+-        C3D_RenderTargetDelete(this->framebuffer);
+-        C3D_TexDelete(this->texture);
++    /*
++    ** citro3d panics (svcBreak) when a render target is deleted between
++    ** C3D_FrameBegin and C3D_FrameEnd, and a texture freed mid-frame may still
++    ** be read by draws already queued.  Lua's GC finalizes Canvases and Images
++    ** whenever it steps -- including inside love.draw -- so the GPU objects
++    ** are handed to the renderer and released after the frame ends.
++    */
++    C3D_RenderTarget* target = this->IsRenderTarget() ? this->framebuffer : nullptr;
++    C3D_Tex* texture         = this->texture;
++
++    this->framebuffer = nullptr;
++    this->texture     = nullptr;
++
++    if (target == nullptr && texture == nullptr)
++        return;
+ 
+-        delete this->texture;
+-    }
++    auto& renderer = Renderer<Console::CTR>::Instance();
++    renderer.ForgetTexture(texture);
++
++    auto release = [target, texture]() {
++        if (target != nullptr)
++            C3D_RenderTargetDelete(target);
++
++        if (texture != nullptr)
++        {
++            C3D_TexDelete(texture);
++            delete texture;
++        }
++    };
++
++    if (renderer.IsInFrame())
++        renderer.DeferCallToEndOfFrame(std::move(release));
+     else
+-    {
+-        C3D_TexDelete(this->texture);
+-        delete this->texture;
+-    }
++        release();
+ }
+ 
+ void Texture<Console::CTR>::SetSamplerState(const SamplerState& state)
 diff --git a/platform/ctr/source/objects/truetyperasterizer_ext.cpp b/platform/ctr/source/objects/truetyperasterizer_ext.cpp
 index d1511fa..996d320 100644
 --- a/platform/ctr/source/objects/truetyperasterizer_ext.cpp
@@ -520,6 +658,27 @@ index d1511fa..996d320 100644
  }
  
  template<>
+diff --git a/platform/ctr/source/utilities/driver/renderer/renderer_ext.cpp b/platform/ctr/source/utilities/driver/renderer/renderer_ext.cpp
+index 8a70552..d09959d 100644
+--- a/platform/ctr/source/utilities/driver/renderer/renderer_ext.cpp
++++ b/platform/ctr/source/utilities/driver/renderer/renderer_ext.cpp
+@@ -128,6 +128,16 @@ void Renderer<Console::CTR>::BindFramebuffer(Texture<Console::ALL>* texture)
+     }
+ 
+     C3D_FrameDrawOn(this->context.target);
++    /*
++    ** C3D_FrameDrawOn resets the GPU viewport to the whole target, and the
++    ** projection belongs to the previous target (a rotated screen ortho, or a
++    ** canvas ortho), so the cached viewport must not short-circuit this.  A
++    ** 400x240 canvas has the same rect as the top screen, and two canvases of
++    ** one size share theirs: either way the cache skipped the update and the
++    ** frame was drawn with the wrong projection (the game picture landed
++    ** off-centre).
++    */
++    this->viewport = Rect(Rect::EMPTY);
+     this->SetViewport(viewport, this->context.target->linked);
+ }
+ 
 diff --git a/source/modules/audio/wrap_audio.cpp b/source/modules/audio/wrap_audio.cpp
 index ec83e74..0afe941 100644
 --- a/source/modules/audio/wrap_audio.cpp
@@ -721,6 +880,124 @@ index d229e36..ac573cd 100644
      luax::Preload(L, love::Initialize, "love");
      luax::Require(L, "love");
      lua_pop(L, 1);
+diff --git a/source/utilities/threads/thread.cpp b/source/utilities/threads/thread.cpp
+index 336ad76..0f4f2d4 100644
+--- a/source/utilities/threads/thread.cpp
++++ b/source/utilities/threads/thread.cpp
+@@ -1,6 +1,98 @@
+ #include <utilities/threads/thread.hpp>
+ #include <utilities/threads/threadable.hpp>
+ 
++#if defined(__3DS__)
++    #include <3ds.h>
++#endif
++
++#if defined(__3DS__)
++love::Thread::Thread(Threadable* threadable) : threadable(threadable), running(false)
++{}
++
++void love::Thread::Join()
++{
++    if (this->thread == nullptr)
++        return;
++
++    threadJoin(this->thread, U64_MAX);
++    threadFree(this->thread);
++    this->thread = nullptr;
++}
++
++love::Thread::~Thread()
++{
++    this->Join();
++}
++
++void love::Thread::Wait()
++{
++    {
++        std::unique_lock lock(this->mutex);
++
++        if (!this->Joinable())
++            return;
++    }
++
++    this->Join();
++    this->running = false;
++}
++
++void love::Thread::Entry(void* data)
++{
++    love::Thread::Runner(data);
++}
++
++/*
++** Where a worker runs.  New 3DS: core 2, a whole core of its own.  Otherwise
++** (or if the kernel refuses core 2) the main thread's core, one priority
++** step ABOVE the main thread, so it preempts the game loop whenever it has
++** work instead of waiting for vblank; the LOVE workers block on channels or
++** sleep when idle, so that costs the game only the work they actually do.
++*/
++static Thread_tag* createWorker(ThreadFunc entry, void* arg)
++{
++    constexpr size_t STACK_SIZE = 0x40000;
++
++    int32_t priority = 0x30;
++    svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
++
++    bool isNew3DS = false;
++    APT_CheckNew3DS(&isNew3DS);
++
++    if (isNew3DS)
++    {
++        Thread_tag* handle = threadCreate(entry, arg, STACK_SIZE, priority, 2, false);
++        if (handle != nullptr)
++            return handle;
++    }
++
++    const int32_t raised = priority > 0x19 ? priority - 1 : priority;
++    return threadCreate(entry, arg, STACK_SIZE, raised, -2, false);
++}
++
++bool love::Thread::Start()
++{
++    std::unique_lock lock(this->mutex);
++
++    if (this->running)
++        return false;
++
++    this->Join();
++
++    this->threadable->Retain();
++
++    this->running = true;
++    this->thread  = createWorker(&love::Thread::Entry, this);
++
++    if (this->thread == nullptr)
++    {
++        this->running = false;
++        this->threadable->Release();
++    }
++
++    return this->running;
++}
++#else
+ love::Thread::Thread(Threadable* threadable) : threadable(threadable), running(false), thread {}
+ {}
+ 
+@@ -43,6 +135,7 @@ bool love::Thread::Start()
+ 
+     return this->running;
+ }
++#endif
+ 
+ int love::Thread::Runner(void* data)
+ {
+@@ -54,4 +147,4 @@ int love::Thread::Runner(void* data)
+     self->threadable->Release();
+ 
+     return 0;
+-}
+\ No newline at end of file
++}
 -- 
 2.43.0
 
