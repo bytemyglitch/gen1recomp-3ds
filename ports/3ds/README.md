@@ -61,6 +61,10 @@ LÖVE Potion (`lovepotion-3ds.patch`):
 - On 3DS every `.png`/`.jpg` path was silently opened as `.t3x` (and `.ttf`
   as `.bcfnt`), so no PNG could ever load. It now falls back to the converted
   file only when the file asked for is missing.
+- Every font copied the whole ~3 MB system font into linear memory. After a
+  handful of text sizes the allocation failed and the console crashed
+  (Luma3DS data abort in `memcpy`). Fonts built from the same data now share
+  one copy, and non-CFNT data raises a Lua error instead of crashing.
 
 Gen1Recomp:
 

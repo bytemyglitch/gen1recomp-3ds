@@ -1,4 +1,4 @@
-From dfb76484ea518e83c76f23bf60e64bfddab408e9 Mon Sep 17 00:00:00 2001
+From caf5b38306c94a9d93634922ad120a4d3c69f86f Mon Sep 17 00:00:00 2001
 From: Aaron Morgan <morganaaron.mail@icloud.com>
 Date: Mon, 5 Oct 2026 15:55:33 -0500
 Subject: [PATCH] 3DS: implement queueable sources, decode PNG, fix static
@@ -18,9 +18,10 @@ Claude-Session: https://claude.ai/code/session_01YUDdWjWFXzUKoBPqr1pYpC
  platform/ctr/include/objects/source_ext.hpp   |  19 ++
  .../ctr/source/modules/imagemodule_ext.cpp    |   2 +
  platform/ctr/source/objects/source_ext.cpp    | 177 ++++++++++++++++--
+ .../source/objects/truetyperasterizer_ext.cpp |  78 +++++++-
  source/modules/audio/wrap_audio.cpp           |  29 ++-
  source/modules/filesystem/wrap_filesystem.cpp |  10 +-
- 6 files changed, 217 insertions(+), 21 deletions(-)
+ 7 files changed, 290 insertions(+), 26 deletions(-)
 
 diff --git a/include/objects/imagedata/imagedata.tcc b/include/objects/imagedata/imagedata.tcc
 index dce31cf..2cfa70f 100644
@@ -347,6 +348,120 @@ index 4e4f8c3..37e408c 100644
      ::DSP::Instance().ChannelAddBuffer(this->channel, &waveBuffer);
  
      if (this->sourceType != TYPE_STREAM)
+diff --git a/platform/ctr/source/objects/truetyperasterizer_ext.cpp b/platform/ctr/source/objects/truetyperasterizer_ext.cpp
+index d1511fa..996d320 100644
+--- a/platform/ctr/source/objects/truetyperasterizer_ext.cpp
++++ b/platform/ctr/source/objects/truetyperasterizer_ext.cpp
+@@ -7,9 +7,72 @@
+ #include <utilities/shaper/genericshaper.hpp>
+ 
+ #include <cmath>
++#include <cstring>
++#include <mutex>
++#include <unordered_map>
+ 
+ using namespace love;
+ 
++/*
++** Every rasterizer used to linearAlloc and fix up its own copy of the font
++** data -- ~3 MB for the system font -- so a game creating a font per text
++** size ran the linear heap dry after a handful, linearAlloc returned NULL and
++** the memcpy into it took the whole console down.  Rasterizers built from the
++** same Data now share one fixed-up copy, freed with the last of them.  Keying
++** by the source buffer is safe: each rasterizer keeps its Data alive.
++*/
++namespace
++{
++    struct SharedFace
++    {
++        CFNT_s* face;
++        size_t references;
++    };
++
++    std::mutex sharedFacesMutex;
++    std::unordered_map<const void*, SharedFace> sharedFaces;
++
++    CFNT_s* acquireFace(Data* data)
++    {
++        std::lock_guard<std::mutex> lock(sharedFacesMutex);
++
++        const void* key = data->GetData();
++        auto found      = sharedFaces.find(key);
++
++        if (found != sharedFaces.end())
++        {
++            found->second.references++;
++            return found->second.face;
++        }
++
++        auto* face = (CFNT_s*)linearAlloc(data->GetSize());
++        if (face == nullptr)
++            throw love::Exception("Not enough linear memory for font data (%u bytes).",
++                                  (unsigned)data->GetSize());
++
++        std::memcpy((uint8_t*)face, data->GetData(), data->GetSize());
++        fontFixPointers(face);
++
++        sharedFaces.emplace(key, SharedFace { face, 1 });
++        return face;
++    }
++
++    void releaseFace(const void* key)
++    {
++        std::lock_guard<std::mutex> lock(sharedFacesMutex);
++
++        auto found = sharedFaces.find(key);
++        if (found == sharedFaces.end())
++            return;
++
++        if (--found->second.references == 0)
++        {
++            linearFree(found->second.face);
++            sharedFaces.erase(found);
++        }
++    }
++} // namespace
++
+ static float scaleMetric(uint8_t value, float scale)
+ {
+     return value * scale;
+@@ -22,9 +85,10 @@ TrueTypeRasterizer<Console::CTR>::TrueTypeRasterizer(FT_Library, Data* data, int
+ {
+     this->dpiScale = dpiScale;
+ 
+-    this->face = (CFNT_s*)linearAlloc(data->GetSize());
+-    std::memcpy((uint8_t*)this->face, data->GetData(), data->GetSize());
+-    fontFixPointers(this->face);
++    if (data->GetSize() < 4 || std::memcmp(data->GetData(), "CFNT", 4) != 0)
++        throw Exception("Only CFNT (.bcfnt) fonts can be used on Nintendo 3DS.");
++
++    this->face = acquireFace(data);
+ 
+     auto* fontInfo  = fontGetInfo(this->face);
+     auto* sheetInfo = fontInfo->tglp;
+@@ -32,7 +96,11 @@ TrueTypeRasterizer<Console::CTR>::TrueTypeRasterizer(FT_Library, Data* data, int
+     this->scale = std::floor(size * dpiScale + 0.5f) / sheetInfo->cellHeight;
+ 
+     if (size <= 0 || scale <= 0)
++    {
++        releaseFace(data->GetData());
++        this->face = nullptr;
+         throw Exception("Invalid TrueType font size: %d", size);
++    }
+ 
+     this->data.Set(data);
+     this->hinting = hinting;
+@@ -46,8 +114,8 @@ TrueTypeRasterizer<Console::CTR>::TrueTypeRasterizer(FT_Library, Data* data, int
+ template<>
+ TrueTypeRasterizer<Console::CTR>::~TrueTypeRasterizer()
+ {
+-    if (this->face)
+-        linearFree(this->face);
++    if (this->face && this->data.Get())
++        releaseFace(this->data->GetData());
+ }
+ 
+ template<>
 diff --git a/source/modules/audio/wrap_audio.cpp b/source/modules/audio/wrap_audio.cpp
 index ec83e74..0afe941 100644
 --- a/source/modules/audio/wrap_audio.cpp
